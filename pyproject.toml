@@ -1,0 +1,19 @@
+[project]
+name = "conceptrecognition"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "As17-01",email = "aseliverstov@nes.ru"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openai-whisper (>=20250625,<20250626)",
+    "torch (==2.7.1)",
+    "numpy (==2.4.6)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
