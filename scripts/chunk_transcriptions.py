@@ -5,6 +5,15 @@ import hydra
 from pathlib import Path
 from omegaconf import DictConfig
 
+# Whisper transcription bug: this phrase gets hallucinated repeatedly and is not actual speech
+TRANSCRIPTION_ARTIFACTS = ["С вами был Игорь Негода."]
+
+
+def clean_text(text: str) -> str:
+    for artifact in TRANSCRIPTION_ARTIFACTS:
+        text = text.replace(artifact, "")
+    return text
+
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     words = text.split()
@@ -32,7 +41,7 @@ def chunk_transcriptions(src_dir: Path, dst_dir: Path, chunk_size: int, overlap:
     for txt_path in sorted(txt_files):
         jsonl_path = dst_dir / txt_path.with_suffix(".jsonl").name
         print(f"{txt_path.name} -> {jsonl_path}")
-        text = txt_path.read_text(encoding="utf-8")
+        text = clean_text(txt_path.read_text(encoding="utf-8"))
         chunks = chunk_text(text, chunk_size, overlap)
         with jsonl_path.open("w", encoding="utf-8") as f:
             for i, chunk in enumerate(chunks):
