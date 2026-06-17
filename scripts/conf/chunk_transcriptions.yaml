@@ -1,0 +1,4 @@
+src: data/transcriptions # folder containing transcription TXT files
+dst: data/chunks         # folder where chunk JSONL files will be saved
+chunk_size: 200          # number of words per chunk
+overlap: 50              # number of words shared between consecutive chunks
