@@ -1,4 +1,5 @@
 src: data/audio          # folder containing MP3 files
 dst: data/transcriptions # folder where text files will be saved
 model: large-v3           # largest whisper model (~10GB RAM); needs WSL memory limit raised beyond default 50% of host RAM
+model_dir: models/whisper # local cache for model weights; run scripts/download_whisper_model.py once with internet, then this works fully offline
 language: ru              # primary language of the recordings

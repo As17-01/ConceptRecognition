@@ -8,6 +8,13 @@
 #SBATCH --gpus=1                            # Требуемое кол-во GPU
 
 module load Python
-source activate <env_name>
+source activate concept_recognition
 
-poetry run python scripts/transcribe.py --config-name=transcribe_obrazovatelny_kanal
+# Model weights must already be present in models/whisper (run scripts/download_whisper_model.py
+# once on a machine with internet access, then copy the whole repo, including models/, to the cluster).
+if [ ! -f "models/whisper/large-v3.pt" ]; then
+    echo "models/whisper/large-v3.pt not found. Run scripts/download_whisper_model.py with internet access first." >&2
+    exit 1
+fi
+
+poetry run python scripts/transcribe.py

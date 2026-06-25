@@ -220,4 +220,5 @@ __marimo__/
 t.txt
 data/
 outputs/
+models/
 .vscode
