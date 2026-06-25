@@ -1,4 +1,4 @@
 src: data/audio          # folder containing MP3 files
 dst: data/transcriptions # folder where text files will be saved
-model: medium            # whisper model: tiny, base, small, medium, large
-language: ru             # primary language of the recordings
+model: large-v3           # largest whisper model (~10GB RAM); needs WSL memory limit raised beyond default 50% of host RAM
+language: ru              # primary language of the recordings
