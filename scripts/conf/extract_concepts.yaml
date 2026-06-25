@@ -1,7 +1,0 @@
-src: data/chunks                             # folder containing chunk JSONL files
-dst: data/concepts                           # folder where concept JSONL files will be saved
-embed_model: intfloat/multilingual-e5-small  # sentence-transformers model used to embed chunk text
-label_model: Qwen/Qwen2.5-1.5B-Instruct      # small instruct LLM used to extract a concept name per chunk
-batch_size: 32                               # embedding encode batch size
-max_label_new_tokens: 16                     # max generated tokens for a concept name
-max_chunk_chars: 1500                        # max characters of chunk text fed to the LLM prompt
