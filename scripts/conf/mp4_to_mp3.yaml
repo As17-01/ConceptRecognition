@@ -1,3 +1,3 @@
-src: data/recordings   # folder containing MP4 files
-dst: data/audio        # folder where MP3 files will be saved
-quality: 2             # ffmpeg VBR quality (0=best, 9=worst; 2 ≈ 190 kbps)
+src: /mnt/d/видео/ОБРАЗОВАТЕЛЬНЫЙ КАНАЛ          # folder containing MP4 files
+dst: data/audio         # folder where MP3 files will be saved
+quality: 0             # ffmpeg VBR quality (0=best, 9=worst; 2 ≈ 190 kbps)
