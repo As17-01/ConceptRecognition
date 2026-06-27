@@ -1,0 +1,8 @@
+src: data/preprocessed      # folder containing cleaned/punctuated transcript .txt files (see preprocess_transcripts.py)
+dst: data/chunks            # folder where chunked transcripts will be saved
+model: intfloat/multilingual-e5-large # largest widely-used multilingual sentence-transformers model (560M, 1024-dim)
+model_dir: models/sentence_transformers # local cache; run scripts/download_embedding_model.py once with internet, then this works fully offline
+query_prefix: "query: "     # e5 models expect inputs prefixed like this, even for symmetric similarity; set to "" for non-e5 models
+window: 3                   # sentences averaged on each side of a candidate boundary; smooths over short interjections
+percentile: 92               # similarity-drop percentile required to count as a chunk boundary; higher = fewer, larger chunks
+min_sentences: 3             # chunks shorter than this get merged into the previous chunk
