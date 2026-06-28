@@ -12,15 +12,15 @@ source activate concept_recognition
 
 # Slurm starts the job in SLURM_SUBMIT_DIR (the directory `sbatch` was run from); make sure
 # we're at the repo root regardless of where that was. Submit this job from the repo root, e.g.
-# `sbatch scripts/semantic_chunk.sbatch` from inside ConceptRecognition/.
+# `sbatch scripts/semantic_chunk/semantic_chunk.sbatch` from inside ConceptRecognition/.
 cd "$SLURM_SUBMIT_DIR"
 
 # Model weights must already be present in models/sentence_transformers (run
-# scripts/download_embedding_model.py once on a machine with internet access, then copy the
+# scripts/semantic_chunk/download_embedding_model.py once on a machine with internet access, then copy the
 # whole repo, including models/, to the cluster).
 if [ ! -d "models/sentence_transformers" ]; then
-    echo "models/sentence_transformers not found. Run scripts/download_embedding_model.py with internet access first." >&2
+    echo "models/sentence_transformers not found. Run scripts/semantic_chunk/download_embedding_model.py with internet access first." >&2
     exit 1
 fi
 
-poetry run python scripts/semantic_chunk.py
+poetry run python scripts/semantic_chunk/semantic_chunk.py

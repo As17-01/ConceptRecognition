@@ -140,7 +140,7 @@ def preprocess_transcript(
     print(f"{src_path.name}: {len(words)} words -> {dst_path}")
 
 
-@hydra.main(config_path="conf", config_name="preprocess_transcripts", version_base=None)
+@hydra.main(config_path="../conf", config_name="preprocess_transcripts", version_base=None)
 def main(cfg: DictConfig) -> None:
     src_dir = Path(cfg.src)
     dst_dir = Path(cfg.dst)

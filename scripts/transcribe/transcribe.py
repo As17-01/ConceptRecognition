@@ -25,7 +25,7 @@ def transcribe_mp3s(src_dir: Path, dst_dir: Path, model_name: str, model_dir: Pa
         print("  done")
 
 
-@hydra.main(config_path="conf", config_name="transcribe", version_base=None)
+@hydra.main(config_path="../conf", config_name="transcribe", version_base=None)
 def main(cfg: DictConfig) -> None:
     src_dir = Path(cfg.src)
     dst_dir = Path(cfg.dst)

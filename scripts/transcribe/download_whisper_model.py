@@ -5,7 +5,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 
-@hydra.main(config_path="conf", config_name="transcribe", version_base=None)
+@hydra.main(config_path="../conf", config_name="transcribe", version_base=None)
 def main(cfg: DictConfig) -> None:
     model_dir = Path(cfg.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)

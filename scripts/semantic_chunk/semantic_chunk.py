@@ -22,7 +22,7 @@ def semantic_chunks(
     window: int,
     percentile: float,
     min_sentences: int,
-) -> list[list[str]]:
+) -> tuple[list[list[str]], np.ndarray]:
     prefixed = [query_prefix + s for s in sentences]
     embeddings = model.encode(prefixed, normalize_embeddings=True)
 
@@ -40,23 +40,30 @@ def semantic_chunks(
     threshold = np.percentile(distances, percentile)
     boundaries = {i + 1 for i, d in enumerate(distances) if d >= threshold}
 
-    chunks, current = [], [sentences[0]]
-    for i, sentence in enumerate(sentences[1:], start=1):
+    # Track sentence indices (not just text) through chunking/merging so we can derive a
+    # per-chunk embedding from the matching sentence embeddings afterwards.
+    chunks_idx, current = [], [0]
+    for i in range(1, len(sentences)):
         if i in boundaries:
-            chunks.append(current)
+            chunks_idx.append(current)
             current = []
-        current.append(sentence)
-    chunks.append(current)
+        current.append(i)
+    chunks_idx.append(current)
 
     # Short chunks are usually interjections/asides caught by the threshold,
     # not real topic shifts, so fold them into the chunk before them.
-    merged = [chunks[0]]
-    for chunk in chunks[1:]:
-        if len(chunk) < min_sentences:
-            merged[-1].extend(chunk)
+    merged_idx = [chunks_idx[0]]
+    for idx_chunk in chunks_idx[1:]:
+        if len(idx_chunk) < min_sentences:
+            merged_idx[-1].extend(idx_chunk)
         else:
-            merged.append(chunk)
-    return merged
+            merged_idx.append(idx_chunk)
+
+    chunks = [[sentences[i] for i in idx_chunk] for idx_chunk in merged_idx]
+
+    chunk_embeddings = np.stack([embeddings[idx_chunk].mean(axis=0) for idx_chunk in merged_idx])
+    chunk_embeddings /= np.linalg.norm(chunk_embeddings, axis=1, keepdims=True)
+    return chunks, chunk_embeddings
 
 
 def chunk_transcript(
@@ -74,7 +81,7 @@ def chunk_transcript(
         print(f"{src_path.name}: no sentences found, skipping")
         return
 
-    chunks = semantic_chunks(sentences, model, query_prefix, window, percentile, min_sentences)
+    chunks, chunk_embeddings = semantic_chunks(sentences, model, query_prefix, window, percentile, min_sentences)
 
     out_dir = dst_dir / src_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -85,10 +92,13 @@ def chunk_transcript(
         chunk_path = out_dir / f"chunk_{i:03d}.txt"
         chunk_path.write_text(" ".join(chunk), encoding="utf-8")
 
+    # One row per chunk, in the same order as chunk_001.txt, chunk_002.txt, ...
+    np.save(out_dir / "embeddings.npy", chunk_embeddings)
+
     print(f"{src_path.name}: {len(sentences)} sentences -> {len(chunks)} chunks -> {out_dir}")
 
 
-@hydra.main(config_path="conf", config_name="semantic_chunk", version_base=None)
+@hydra.main(config_path="../conf", config_name="semantic_chunk", version_base=None)
 def main(cfg: DictConfig) -> None:
     src_dir = Path(cfg.src)
     dst_dir = Path(cfg.dst)

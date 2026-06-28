@@ -35,7 +35,7 @@ def convert_mp4_to_mp3(src_dir: Path, dst_dir: Path, quality: int) -> None:
             print("  done")
 
 
-@hydra.main(config_path="conf", config_name="mp4_to_mp3", version_base=None)
+@hydra.main(config_path="../conf", config_name="mp4_to_mp3", version_base=None)
 def main(cfg: DictConfig) -> None:
     src_dir = Path(cfg.src)
     dst_dir = Path(cfg.dst)
