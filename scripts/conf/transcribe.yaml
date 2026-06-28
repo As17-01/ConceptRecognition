@@ -3,3 +3,11 @@ dst: data/transcriptions # folder where text files will be saved
 model: large-v3           # largest whisper model (~10GB RAM); needs WSL memory limit raised beyond default 50% of host RAM
 model_dir: models/whisper # local cache for model weights; run scripts/download_whisper_model.py once with internet, then this works fully offline
 language: ru              # primary language of the recordings
+# Biases Whisper's vocabulary toward the speaker's actual jargon (movement/dance terms,
+# code-switched English) to reduce mid-word hallucinations like "бедраader" or "chamber today".
+# Only strongly affects the first ~224 tokens of context; extend/adjust as you spot recurring
+# mis-transcriptions in new recordings.
+initial_prompt: >-
+  Практика контемпорари и двигательной импровизации. Термины: вытяжение, ось, текстура, импульс,
+  амплитуда, многозадачность, thread of the arms, thread of the legs, full body experience,
+  acrobody, range, flow, vibe.

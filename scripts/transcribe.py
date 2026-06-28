@@ -6,7 +6,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 
-def transcribe_mp3s(src_dir: Path, dst_dir: Path, model_name: str, model_dir: Path, language: str) -> None:
+def transcribe_mp3s(src_dir: Path, dst_dir: Path, model_name: str, model_dir: Path, language: str, initial_prompt: str) -> None:
     mp3_files = list(src_dir.glob("*.mp3"))
     if not mp3_files:
         print(f"No MP3 files found in {src_dir}")
@@ -20,7 +20,7 @@ def transcribe_mp3s(src_dir: Path, dst_dir: Path, model_name: str, model_dir: Pa
     for mp3_path in sorted(mp3_files):
         txt_path = dst_dir / mp3_path.with_suffix(".txt").name
         print(f"{mp3_path.name} -> {txt_path}")
-        result = model.transcribe(str(mp3_path), language=language)
+        result = model.transcribe(str(mp3_path), language=language, initial_prompt=initial_prompt)
         txt_path.write_text(result["text"], encoding="utf-8")
         print("  done")
 
@@ -35,7 +35,7 @@ def main(cfg: DictConfig) -> None:
         print(f"Source folder not found: {src_dir}", file=sys.stderr)
         sys.exit(1)
 
-    transcribe_mp3s(src_dir, dst_dir, cfg.model, model_dir, cfg.language)
+    transcribe_mp3s(src_dir, dst_dir, cfg.model, model_dir, cfg.language, cfg.initial_prompt)
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ window_words: 200            # words per inference window (keeps each call well 
 max_ngram: 6                 # longest repeated phrase (in words) checked for hallucination-loop collapsing
 repeat_min_count: 3          # an n-gram must repeat at least this many times in a row to be collapsed
 remove_fillers: true         # drop standalone disfluencies (ну, эм, ммм, ...); never touches English words or digits
+remove_mixed_script: true    # drop tokens that glue Cyrillic and Latin letters together (e.g. "бедраader"); a reliable hallucination signature

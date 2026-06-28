@@ -18,6 +18,12 @@ NON_TARGET_CHARS = re.compile(r"[^0-9A-Za-zА-Яа-яЁё\s]")
 # digits are never touched.
 FILLER_WORDS = {"ну", "э", "эм", "эмм", "ммм", "мм", "ыыы", "эээ", "ээ", "um", "umm", "uh", "uhh"}
 
+# Real code-switching happens at the word level ("thread of the arms"), never mid-word -
+# a token with both scripts glued together (e.g. "бедраader") is a reliable Whisper
+# hallucination signature, not a genuine word.
+CYRILLIC_CHAR = re.compile(r"[А-Яа-яЁё]")
+LATIN_CHAR = re.compile(r"[A-Za-z]")
+
 # Mirrors the inference snippet in the RUPunct_big model card.
 LABEL_TO_FORMATTER = {
     "LOWER_O": lambda t: t,
@@ -89,6 +95,10 @@ def remove_fillers(words: list[str]) -> list[str]:
     return [w for w in words if w.lower() not in FILLER_WORDS]
 
 
+def remove_mixed_script_tokens(words: list[str]) -> list[str]:
+    return [w for w in words if not (CYRILLIC_CHAR.search(w) and LATIN_CHAR.search(w))]
+
+
 def restore_punctuation(words: list[str], classifier, window_words: int) -> str:
     parts = []
     for i in range(0, len(words), window_words):
@@ -109,6 +119,7 @@ def preprocess_transcript(
     max_ngram: int,
     repeat_min_count: int,
     drop_fillers: bool,
+    drop_mixed_script: bool,
 ) -> None:
     text = src_path.read_text(encoding="utf-8")
     words = clean_text(text).split()
@@ -116,6 +127,8 @@ def preprocess_transcript(
         print(f"{src_path.name}: no words found, skipping")
         return
 
+    if drop_mixed_script:
+        words = remove_mixed_script_tokens(words)
     words = collapse_repeated_ngrams(words, max_ngram, repeat_min_count)
     if drop_fillers:
         words = remove_fillers(words)
@@ -150,7 +163,9 @@ def main(cfg: DictConfig) -> None:
     classifier = pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="first", device=device)
 
     for txt_path in txt_files:
-        preprocess_transcript(txt_path, dst_dir, classifier, cfg.window_words, cfg.max_ngram, cfg.repeat_min_count, cfg.remove_fillers)
+        preprocess_transcript(
+            txt_path, dst_dir, classifier, cfg.window_words, cfg.max_ngram, cfg.repeat_min_count, cfg.remove_fillers, cfg.remove_mixed_script
+        )
 
 
 if __name__ == "__main__":
