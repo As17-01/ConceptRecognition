@@ -18,7 +18,9 @@ dependencies = [
     "tiktoken (>=0.7.0,<0.10.0)",
     "scikit-learn (>=1.4.0,<1.8.0)",
     "scipy (>=1.13.0,<1.17.0)",
-    "torchaudio (>=2.6.0,<2.7.0)"
+    "torchaudio (>=2.6.0,<2.7.0)",
+    "accelerate (>=1.0.0,<2.0.0)",
+    "bitsandbytes (>=0.43.0,<1.0.0)"
 ]
 
 
