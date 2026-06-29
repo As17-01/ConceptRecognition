@@ -143,7 +143,15 @@ def restore_punctuation(words: list[str], classifier, window_words: int, overlap
             break
         start += stride
 
-    return " ".join(parts)
+    text = " ".join(parts)
+    # LOWER_DEFIS glues "-" to the preceding word expecting it to also glue to the next one,
+    # but the join above always inserts a space; LOWER_TIRE has the opposite problem, missing
+    # the leading space that UPPER_TIRE/UPPER_TOTAL_TIRE include. Neither "-" nor "—" can occur
+    # from any other source (clean_text strips both from the raw input before classification),
+    # so these substitutions can't collide with anything else in the text.
+    text = re.sub(r"-\s+", "-", text)
+    text = re.sub(r"\s*—\s*", " — ", text)
+    return text
 
 
 def preprocess_transcript(

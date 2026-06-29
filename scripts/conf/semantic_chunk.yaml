@@ -3,6 +3,22 @@ dst: data/chunks            # folder where chunked transcripts will be saved
 model: intfloat/multilingual-e5-large # largest widely-used multilingual sentence-transformers model (560M, 1024-dim)
 model_dir: models/sentence_transformers # local cache; run scripts/download_embedding_model.py once with internet, then this works fully offline
 query_prefix: "query: "     # e5 models expect inputs prefixed like this, even for symmetric similarity; set to "" for non-e5 models
-window: 3                   # sentences averaged on each side of a candidate boundary; smooths over short interjections
-percentile: 92               # similarity-drop percentile required to count as a chunk boundary; higher = fewer, larger chunks
-min_sentences: 3             # chunks shorter than this get merged into the previous chunk
+# Each level is a snapshot of one continuous adjacent-only agglomerative merge sequence at a
+# different cluster count (target = sentence_count // avg_sentences), so coarser levels are
+# always exact unions of finer levels' chunks - this is what gives the hierarchy proper nesting.
+# All three are always saved as real chunk_NNN.txt + embeddings.npy files (see hierarchy.json
+# for how they nest), not just the broad level - tune these as average sentences per chunk.
+levels:
+  specific: 6
+  mid: 20
+  broad: 60
+# Pure greedy merging lets one locally-homogeneous stretch keep absorbing merges far past a
+# level's average size while leaving other stretches fragmented; this caps any cluster at
+# max_size_multiplier times the relevant level's average size before it's reached. Lower = more
+# uniform chunk sizes but less driven by genuine topic coherence; higher = closer to pure
+# similarity-driven merging (and closer to the uneven sizes that motivated adding this).
+# Measured on a real file: 2.5 barely changed anything (worst case stayed ~176 sentences vs an
+# ~71 target); 1.4 cut that to one ~51-sentence outlier with otherwise even sizes. A cap can't
+# be guaranteed exactly - if every remaining local merge exceeds it, one gets allowed anyway
+# rather than stalling, so rare outliers like that are expected, not a bug to chase to zero.
+max_size_multiplier: 1.4
