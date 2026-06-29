@@ -45,15 +45,16 @@ def pack_speech_chunks(speech_timestamps: list[dict], max_samples: int) -> list[
     return chunks
 
 
-def filter_hallucinated_segments(segments: list[dict], max_no_speech_prob: float, min_avg_logprob: float, max_compression_ratio: float) -> str:
-    kept = [
-        seg["text"]
-        for seg in segments
-        if seg["no_speech_prob"] <= max_no_speech_prob
-        and seg["avg_logprob"] >= min_avg_logprob
-        and seg["compression_ratio"] <= max_compression_ratio
-    ]
-    return "".join(kept).strip()
+def filter_hallucinated_segments(
+    segments: list[dict], max_no_speech_prob: float, min_avg_logprob: float, max_compression_ratio: float
+) -> tuple[str, int, int]:
+    kept, dropped = [], 0
+    for seg in segments:
+        if seg["no_speech_prob"] <= max_no_speech_prob and seg["avg_logprob"] >= min_avg_logprob and seg["compression_ratio"] <= max_compression_ratio:
+            kept.append(seg["text"])
+        else:
+            dropped += 1
+    return "".join(kept).strip(), len(kept), dropped
 
 
 def transcribe_mp3(
@@ -72,7 +73,7 @@ def transcribe_mp3(
     vad_min_silence_duration_ms: int,
     vad_speech_pad_ms: int,
     max_chunk_seconds: float,
-) -> str:
+) -> tuple[str, int, int]:
     wav = torch.from_numpy(whisper.audio.load_audio(str(mp3_path), sr=SAMPLE_RATE))
     speech_timestamps = get_speech_timestamps(
         wav,
@@ -89,7 +90,7 @@ def transcribe_mp3(
     max_samples = int(max_chunk_seconds * SAMPLE_RATE)
     chunk_groups = pack_speech_chunks(speech_timestamps, max_samples)
 
-    chunk_texts = []
+    chunk_texts, total_kept, total_dropped = [], 0, 0
     for group in chunk_groups:
         audio = collect_chunks(group, wav).numpy()
         result = model.transcribe(
@@ -97,10 +98,17 @@ def transcribe_mp3(
             language=language,
             initial_prompt=initial_prompt,
             condition_on_previous_text=condition_on_previous_text,
+            # whisper's CLI defaults to beam search (vs greedy decoding) but the Python API
+            # does not inherit that default, so it's set explicitly here.
+            beam_size=5,
+            best_of=5,
         )
-        chunk_texts.append(filter_hallucinated_segments(result["segments"], max_no_speech_prob, min_avg_logprob, max_compression_ratio))
+        text, kept, dropped = filter_hallucinated_segments(result["segments"], max_no_speech_prob, min_avg_logprob, max_compression_ratio)
+        chunk_texts.append(text)
+        total_kept += kept
+        total_dropped += dropped
 
-    return " ".join(t for t in chunk_texts if t)
+    return " ".join(t for t in chunk_texts if t), total_kept, total_dropped
 
 
 def transcribe_mp3s(
@@ -133,29 +141,48 @@ def transcribe_mp3s(
     print(f"Loading whisper model '{model_name}' from '{model_dir}'...")
     model = whisper.load_model(model_name, download_root=str(model_dir))
 
+    succeeded, skipped, failed = 0, 0, 0
     for mp3_path in sorted(mp3_files):
         txt_path = dst_dir / mp3_path.with_suffix(".txt").name
-        print(f"{mp3_path.name} -> {txt_path}")
 
-        text = transcribe_mp3(
-            mp3_path,
-            model,
-            vad_model,
-            get_speech_timestamps,
-            collect_chunks,
-            language,
-            initial_prompt,
-            condition_on_previous_text,
-            max_no_speech_prob,
-            min_avg_logprob,
-            max_compression_ratio,
-            vad_threshold,
-            vad_min_silence_duration_ms,
-            vad_speech_pad_ms,
-            max_chunk_seconds,
-        )
+        # Makes a 100+ file job resumable: a crash, preemption, or timeout partway through a
+        # 72-hour run shouldn't force re-transcribing files that already finished.
+        if txt_path.exists():
+            print(f"{mp3_path.name}: output already exists, skipping ({txt_path})")
+            skipped += 1
+            continue
+
+        print(f"{mp3_path.name} -> {txt_path}")
+        try:
+            text, kept, dropped = transcribe_mp3(
+                mp3_path,
+                model,
+                vad_model,
+                get_speech_timestamps,
+                collect_chunks,
+                language,
+                initial_prompt,
+                condition_on_previous_text,
+                max_no_speech_prob,
+                min_avg_logprob,
+                max_compression_ratio,
+                vad_threshold,
+                vad_min_silence_duration_ms,
+                vad_speech_pad_ms,
+                max_chunk_seconds,
+            )
+        except Exception as e:
+            # One bad file (corrupt audio, an unexpected edge case) shouldn't lose progress on
+            # the rest of a multi-hour batch; log it and move on instead of crashing the job.
+            print(f"  FAILED: {e}", file=sys.stderr)
+            failed += 1
+            continue
+
         txt_path.write_text(text, encoding="utf-8")
-        print("  done")
+        print(f"  done ({kept} segments kept, {dropped} dropped as likely hallucinations)")
+        succeeded += 1
+
+    print(f"\n{succeeded} transcribed, {skipped} skipped (already done), {failed} failed, out of {len(mp3_files)} total")
 
 
 @hydra.main(config_path="../conf", config_name="transcribe", version_base=None)

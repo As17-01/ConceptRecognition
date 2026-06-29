@@ -64,6 +64,11 @@ LABEL_TO_FORMATTER = {
 
 def clean_text(text: str) -> str:
     text = NON_TARGET_CHARS.sub(" ", text)
+    # RUPunct's LOWER_* labels are a no-op on the original word (they assume it's already
+    # lowercase); since Whisper's own casing is no longer reliably absent (the new transcribe.py
+    # produces decent native casing), leaving it in place would let words Whisper happened to
+    # capitalize mid-sentence stay wrongly capitalized instead of being corrected by the model.
+    text = text.lower()
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -99,15 +104,45 @@ def remove_mixed_script_tokens(words: list[str]) -> list[str]:
     return [w for w in words if not (CYRILLIC_CHAR.search(w) and LATIN_CHAR.search(w))]
 
 
-def restore_punctuation(words: list[str], classifier, window_words: int) -> str:
+def restore_punctuation(words: list[str], classifier, window_words: int, overlap_words: int) -> str:
+    """Classifies in overlapping windows and keeps only each window's high-context "core"
+    (the model has no context outside the window it's given, so the words right at a window's
+    edge are the ones most likely to get punctuated as if sentence-initial when they're not).
+    The overlap region is covered twice, by two different windows, and only the copy with the
+    most surrounding context on both sides is kept - this is what makes sentence-boundary
+    punctuation reliable across window splits, which matters since semantic_chunk.py treats
+    sentences as its atomic unit.
+
+    The model groups adjacent same-label words into a single prediction unit, and which words
+    end up in the same group is itself context-dependent - the same word can be grouped
+    differently by two different (overlapping) windows. Deciding what to keep by each group's
+    own midpoint is therefore unsafe: a group straddling the seam between two windows can fall
+    outside *both* windows' keep range and silently vanish. Reconstructing each window's full
+    text first and only then slicing it by plain word position sidesteps this entirely, since
+    that slicing no longer depends on how any window happened to group its words.
+    """
+    n_words = len(words)
+    if n_words == 0:
+        return ""
+
+    half_overlap = overlap_words // 2
+    stride = window_words - overlap_words
+
     parts = []
-    for i in range(0, len(words), window_words):
-        window_text = " ".join(words[i : i + window_words])
-        if not window_text:
-            continue
-        preds = classifier(window_text)
-        formatted = [LABEL_TO_FORMATTER.get(p["entity_group"], lambda t: t)(p["word"].strip()) for p in preds]
-        parts.append(" ".join(formatted))
+    start = 0
+    while True:
+        end = min(start + window_words, n_words)
+        preds = classifier(" ".join(words[start:end]))
+        formatted_words = " ".join(LABEL_TO_FORMATTER.get(p["entity_group"], lambda t: t)(p["word"].strip()) for p in preds).split()
+
+        local_lo = 0 if start == 0 else half_overlap
+        local_hi = (end - start) if end == n_words else (end - start) - half_overlap
+        parts.extend(formatted_words[local_lo:local_hi])
+
+        if end == n_words:
+            break
+        start += stride
+
     return " ".join(parts)
 
 
@@ -116,6 +151,7 @@ def preprocess_transcript(
     dst_dir: Path,
     classifier,
     window_words: int,
+    overlap_words: int,
     max_ngram: int,
     repeat_min_count: int,
     drop_fillers: bool,
@@ -133,7 +169,7 @@ def preprocess_transcript(
     if drop_fillers:
         words = remove_fillers(words)
 
-    restored = restore_punctuation(words, classifier, window_words)
+    restored = restore_punctuation(words, classifier, window_words, overlap_words)
 
     dst_path = dst_dir / src_path.name
     dst_path.write_text(restored, encoding="utf-8")
@@ -158,14 +194,46 @@ def main(cfg: DictConfig) -> None:
 
     print(f"Loading punctuation model '{cfg.model}' from '{cfg.model_dir}'...")
     tokenizer = AutoTokenizer.from_pretrained(cfg.model, cache_dir=cfg.model_dir, strip_accents=False, add_prefix_space=True)
+    # The saved tokenizer config leaves this unset (effectively infinite) even though the model
+    # itself hard-caps at 512 position embeddings, so without this, a window that happens to
+    # tokenize past 512 subwords would crash instead of truncating.
+    tokenizer.model_max_length = 512
     model = AutoModelForTokenClassification.from_pretrained(cfg.model, cache_dir=cfg.model_dir)
     device = 0 if torch.cuda.is_available() else -1
     classifier = pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="first", device=device)
 
+    succeeded, skipped, failed = 0, 0, 0
     for txt_path in txt_files:
-        preprocess_transcript(
-            txt_path, dst_dir, classifier, cfg.window_words, cfg.max_ngram, cfg.repeat_min_count, cfg.remove_fillers, cfg.remove_mixed_script
-        )
+        dst_path = dst_dir / txt_path.name
+
+        # Makes a 100+ file job resumable: a crash or timeout partway through shouldn't force
+        # re-running files that already finished.
+        if dst_path.exists():
+            print(f"{txt_path.name}: output already exists, skipping ({dst_path})")
+            skipped += 1
+            continue
+
+        try:
+            preprocess_transcript(
+                txt_path,
+                dst_dir,
+                classifier,
+                cfg.window_words,
+                cfg.overlap_words,
+                cfg.max_ngram,
+                cfg.repeat_min_count,
+                cfg.remove_fillers,
+                cfg.remove_mixed_script,
+            )
+        except Exception as e:
+            # One bad file shouldn't lose progress on the rest of the batch; log it and move on
+            # instead of crashing the job.
+            print(f"  FAILED: {e}", file=sys.stderr)
+            failed += 1
+            continue
+        succeeded += 1
+
+    print(f"\n{succeeded} preprocessed, {skipped} skipped (already done), {failed} failed, out of {len(txt_files)} total")
 
 
 if __name__ == "__main__":

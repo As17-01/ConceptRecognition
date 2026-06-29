@@ -2,7 +2,8 @@ src: data/transcriptions     # folder containing raw transcript .txt files
 dst: data/preprocessed       # folder where cleaned/punctuated transcripts will be saved
 model: RUPunct/RUPunct_big   # largest model in the RUPunct family; restores punctuation + casing for Russian
 model_dir: models/punctuation # local cache; run scripts/download_punctuation_model.py once with internet, then this works fully offline
-window_words: 200            # words per inference window (keeps each call well under the model's max sequence length)
+window_words: 300            # words per inference window; measured at ~350-360 subword tokens for this corpus, safely under the model's 512-token limit
+overlap_words: 60            # neighboring windows overlap by this many words; predictions from each window's low-context edges are discarded in favor of the neighbor that has full context there - this is what keeps sentence-boundary punctuation reliable across window splits, which matters since semantic_chunk.py treats sentences as its atomic unit
 max_ngram: 6                 # longest repeated phrase (in words) checked for hallucination-loop collapsing
 repeat_min_count: 3          # an n-gram must repeat at least this many times in a row to be collapsed
 remove_fillers: true         # drop standalone disfluencies (ну, эм, ммм, ...); never touches English words or digits
