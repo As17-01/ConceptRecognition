@@ -20,9 +20,12 @@ dependencies = [
     "scipy (>=1.13.0,<1.17.0)",
     "torchaudio (>=2.6.0,<2.7.0)",
     "accelerate (>=1.0.0,<2.0.0)",
-    "bitsandbytes (>=0.43.0,<1.0.0)"
+    "bitsandbytes (>=0.41.0,<0.42.0)"
 ]
 
+
+[tool.poetry]
+package-mode = false
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
