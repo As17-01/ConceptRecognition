@@ -15,10 +15,15 @@ source activate concept_recognition
 # `sbatch scripts/transcribe/transcribe.sbatch` from inside ConceptRecognition/.
 cd "$SLURM_SUBMIT_DIR"
 
-# Model weights must already be present in models/whisper (run scripts/transcribe/download_whisper_model.py
-# once on a machine with internet access, then copy the whole repo, including models/, to the cluster).
+# Model weights must already be present in models/whisper and models/silero_vad (run
+# scripts/transcribe/download_whisper_model.py and scripts/transcribe/download_vad_model.py once
+# on a machine with internet access, then copy the whole repo, including models/, to the cluster).
 if [ ! -f "models/whisper/large-v3.pt" ]; then
     echo "models/whisper/large-v3.pt not found. Run scripts/transcribe/download_whisper_model.py with internet access first." >&2
+    exit 1
+fi
+if [ ! -d "models/silero_vad" ]; then
+    echo "models/silero_vad not found. Run scripts/transcribe/download_vad_model.py with internet access first." >&2
     exit 1
 fi
 

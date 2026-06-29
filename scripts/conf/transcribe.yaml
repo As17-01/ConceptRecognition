@@ -1,8 +1,47 @@
 src: data/audio          # folder containing MP3 files
 dst: data/transcriptions # folder where text files will be saved
 model: large-v3           # largest whisper model (~10GB RAM); needs WSL memory limit raised beyond default 50% of host RAM
-model_dir: models/whisper # local cache for model weights; run scripts/download_whisper_model.py once with internet, then this works fully offline
+model_dir: models/whisper # local cache for model weights; run scripts/transcribe/download_whisper_model.py once with internet, then this works fully offline
 language: ru              # primary language of the recordings
+
+# Voice-activity detection trims music/silence before Whisper ever sees it - the single
+# biggest source of hallucinated text (e.g. "Добро пожаловать в Казахстан", a documented
+# Whisper artifact during non-speech audio) comes from exactly those stretches.
+vad_model_dir: models/silero_vad # local cache for the Silero VAD model; run scripts/transcribe/download_vad_model.py once with internet
+vad_threshold: 0.5               # speech-probability cutoff per audio frame; raise if speech is still being dropped, lower if music/silence still leaks through
+# Library default (100ms) fragments continuous speech into many sub-2s segments on every
+# micro-pause/breath; measured on a real file, raising this to 500ms cut segment count from
+# 135 to 57 over a 10-minute sample with a much healthier median length (4.3s vs 2.6s).
+# Matters because collect_chunks() physically splices segments together when packing chunks -
+# fewer, more natural splice points means less risk of unnatural-sounding joins.
+vad_min_silence_duration_ms: 500
+# Silero's default (30ms) leaves little buffer around each detected speech segment; since
+# collect_chunks() now splices many segments together, a tighter pad risks clipping word
+# onsets/offsets right at the splice points. A bit more headroom costs a few ms of silence/frame.
+vad_speech_pad_ms: 100
+
+# Whisper only applies initial_prompt to the first decoding window of a transcribe() call, so a
+# single long uninterrupted monologue would otherwise get the domain vocabulary hint just once,
+# at the very start. Packing VAD speech segments into chunks capped at this length and calling
+# transcribe() per chunk re-seeds initial_prompt regularly, making it act like persistent
+# background knowledge instead of a one-shot hint. Kept a bit under Whisper's native 30s window.
+max_chunk_seconds: 28
+
+# Segments Whisper itself is unsure about get dropped instead of written out, catching
+# hallucinations VAD doesn't (e.g. mid-speech mistranscriptions). Tune by inspecting
+# result["segments"] on a known-bad file if real speech starts getting cut.
+max_no_speech_prob: 0.6   # drop a segment if Whisper thinks it's more likely silence than speech
+min_avg_logprob: -1.0     # drop a segment if Whisper's own confidence in its decoding is this low
+# Catches repetition-loop hallucinations directly (e.g. "Играет музыка" repeated dozens of
+# times) via the gzip compression ratio of the decoded text - this is the same threshold
+# Whisper uses internally to trigger a higher-temperature retry, applied here as a final
+# filter in case every retry still came back repetitive.
+max_compression_ratio: 2.4
+
+# Whisper-default; lets one hallucinated segment bias the decoding of every segment after
+# it via the running text context. Off trades a little cross-segment coherence for not
+# letting a single bad guess cascade through the rest of the file.
+condition_on_previous_text: false
 # Biases Whisper's vocabulary toward the speaker's actual jargon (movement/dance terms,
 # code-switched English) to reduce mid-word hallucinations like "бедраader" or "chamber today".
 # Only strongly affects the first ~224 tokens of context; extend/adjust as you spot recurring
