@@ -1,6 +1,6 @@
 src: data/audio          # folder containing MP3 files
 dst: data/transcriptions # folder where text files will be saved
-model: large-v3           # largest whisper model (~10GB RAM); needs WSL memory limit raised beyond default 50% of host RAM
+model: medium             # ~1.5GB RAM on CPU; large-v3 needs ~6GB which is too tight for a 7.5GB machine
 model_dir: models/whisper # local cache for model weights; run scripts/transcribe/download_whisper_model.py once with internet, then this works fully offline
 language: ru              # primary language of the recordings
 
@@ -48,5 +48,5 @@ condition_on_previous_text: false
 # mis-transcriptions in new recordings.
 initial_prompt: >-
   Практика контемпорари и двигательной импровизации. Термины: вытяжение, ось, текстура, импульс,
-  амплитуда, многозадачность, thread of the arms, thread of the legs, full body experience,
-  range, flow, vibe.
+  амплитуда, многозадачность, бедра, копчик, кагами, thread of the arms, thread of the legs,
+  full body experience, range, flow, vibe.

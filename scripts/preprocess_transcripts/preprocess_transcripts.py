@@ -151,6 +151,11 @@ def restore_punctuation(words: list[str], classifier, window_words: int, overlap
     # so these substitutions can't collide with anything else in the text.
     text = re.sub(r"-\s+", "-", text)
     text = re.sub(r"\s*—\s*", " — ", text)
+    # RUPunct consistently mispredicts LOWER_DEFIS on these domain-specific cases:
+    # "чуть-чуть" is split as two plain words, and "плие" (a ballet term used constantly
+    # in these recordings) gets incorrectly hyphenated to whatever clause follows it.
+    text = re.sub(r"\bчуть-чуть\b|\bчуть чуть\b", "чуть-чуть", text)
+    text = re.sub(r"\bплие-", "плие, ", text)
     return text
 
 
