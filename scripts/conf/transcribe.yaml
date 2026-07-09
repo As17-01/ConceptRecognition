@@ -1,6 +1,6 @@
 src: data/audio          # folder containing MP3 files
 dst: data/transcriptions # folder where text files will be saved
-model: medium             # ~1.5GB RAM on CPU; large-v3 needs ~6GB which is too tight for a 7.5GB machine
+model: large-v3           # ~1.5GB RAM on CPU; large-v3 needs ~6GB which is too tight for a 7.5GB machine
 model_dir: models/whisper # local cache for model weights; run scripts/transcribe/download_whisper_model.py once with internet, then this works fully offline
 language: ru              # primary language of the recordings
 
