@@ -2,6 +2,7 @@
 #SBATCH --job-name=concept_recognition_semantic_chunk            # Название задачи
 #SBATCH --error=concept_recognition_semantic_chunk-%j.err        # Файл для вывода ошибок
 #SBATCH --output=concept_recognition_semantic_chunk-%j.log       # Файл для вывода результатов
+#SBATCH --partition=rocky
 #SBATCH --time=24:00:00                     # Максимальное время выполнения
 #SBATCH --cpus-per-task=4                   # Количество CPU на одну задачу
 #SBATCH --nodes=1                           # Требуемое кол-во узлов
