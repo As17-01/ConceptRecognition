@@ -5,6 +5,13 @@ model_dir: models/sentence_transformers # local cache; run scripts/download_embe
 query_prefix: "query: "     # e5 models expect inputs prefixed like this, even for symmetric similarity; set to "" for non-e5 models
 # Target cluster count = sentence_count // avg_sentences; tune this as average sentences per chunk.
 avg_sentences: 6
+# Whisper doesn't always add terminal punctuation promptly in run-on speech, so "sentences" can
+# run much longer than a real single-topic sentence. Measured on real preprocessed transcripts:
+# median sentence length is 8 words, p95 is 40, but the tail runs up to 149. Anything over this
+# gets split at comma boundaries (see split_overlong_sentences) before embedding, since a
+# 100+-word span is already well past where a sentence-transformer's pooled embedding represents
+# one idea usefully.
+max_sentence_words: 40
 # Pure greedy merging lets one locally-homogeneous stretch keep absorbing merges far past the
 # target average size while leaving other stretches fragmented; this caps any cluster at
 # max_size_multiplier times the target average size before it's reached. Lower = more

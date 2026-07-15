@@ -13,8 +13,40 @@ from sentence_transformers import SentenceTransformer
 
 def split_sentences(text: str) -> list[str]:
     text = re.sub(r"\s+", " ", text).strip()
-    sentences = re.split(r"(?<=[.!?])\s+", text)
+    # "…" ends a clause the same way "." does (a trailing-off thought, usually followed by
+    # capitalization signaling Whisper itself treated it as a break) but isn't in [.!?], so
+    # without it here a sentence boundary silently gets missed and two sentences merge into one.
+    sentences = re.split(r"(?<=[.!?…])\s+", text)
     return [s for s in sentences if s]
+
+
+def split_overlong_sentences(sentences: list[str], max_words: int) -> list[str]:
+    """Whisper doesn't always add terminal punctuation promptly in run-on speech - measured on
+    real preprocessed transcripts, sentence length has a median of 8 words and a p95 of 40, but a
+    long tail up to 149. A sentence that long is already past the point where a
+    sentence-transformer's pooled embedding usefully represents one idea (see semantic_chunk
+    granularity discussion), so anything over max_words is split at comma boundaries, greedily
+    packing clauses back together up to the limit - like pack_speech_chunks in transcribe.py -
+    rather than atomizing every comma, since ordinary Russian subordinate clauses use commas far
+    more often than English does, not just at true topic breaks."""
+    result = []
+    for sentence in sentences:
+        if len(sentence.split()) <= max_words:
+            result.append(sentence)
+            continue
+
+        clauses = re.split(r"(?<=,)\s+", sentence)
+        current, current_len = [], 0
+        for clause in clauses:
+            clause_len = len(clause.split())
+            if current and current_len + clause_len > max_words:
+                result.append(" ".join(current))
+                current, current_len = [], 0
+            current.append(clause)
+            current_len += clause_len
+        if current:
+            result.append(" ".join(current))
+    return result
 
 
 def encode_with_context(model: SentenceTransformer, sentences: list[str], query_prefix: str) -> np.ndarray:
@@ -118,10 +150,17 @@ def chunk_embeddings_for(embeddings: np.ndarray, ranges: list[tuple[int, int]]) 
 
 
 def chunk_transcript(
-    src_path: Path, dst_dir: Path, model: SentenceTransformer, query_prefix: str, avg_sentences: int, max_size_multiplier: float
+    src_path: Path,
+    dst_dir: Path,
+    model: SentenceTransformer,
+    query_prefix: str,
+    avg_sentences: int,
+    max_size_multiplier: float,
+    max_sentence_words: int,
 ) -> None:
     text = src_path.read_text(encoding="utf-8")
     sentences = split_sentences(text)
+    sentences = split_overlong_sentences(sentences, max_sentence_words)
     if not sentences:
         print(f"{src_path.name}: no sentences found, skipping")
         return
@@ -173,7 +212,9 @@ def main(cfg: DictConfig) -> None:
             continue
 
         try:
-            chunk_transcript(txt_path, dst_dir, model, cfg.query_prefix, cfg.avg_sentences, cfg.max_size_multiplier)
+            chunk_transcript(
+                txt_path, dst_dir, model, cfg.query_prefix, cfg.avg_sentences, cfg.max_size_multiplier, cfg.max_sentence_words
+            )
         except Exception as e:
             # One bad file shouldn't lose progress on the rest of the batch; log it and move on
             # instead of crashing the job.
