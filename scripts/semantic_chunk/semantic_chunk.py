@@ -83,8 +83,14 @@ def encode_with_context(model: SentenceTransformer, sentences: list[str], query_
             # A single sentence alone exceeds the budget; take it truncated rather than stall.
             end = start + 1
 
+        # window_ids is prefix_ids + sentence tokens combined, but budget only accounts for the
+        # sentence-token portion (it's already net of len(prefix_ids)) - slicing window_ids to
+        # budget alone would double-count the prefix and silently truncate real sentence tokens
+        # off the end of a window packed close to full, desyncing the offset bookkeeping below
+        # from the actual (shorter) hidden states and producing a NaN mean(dim=0) over an
+        # out-of-bounds empty slice for whichever sentence got cut off.
         window_ids = prefix_ids + [tok for i in range(start, end) for tok in sentence_ids[i]]
-        input_ids = torch.tensor([[cls_id, *window_ids[:budget], sep_id]], device=device)
+        input_ids = torch.tensor([[cls_id, *window_ids[: budget + len(prefix_ids)], sep_id]], device=device)
         attention_mask = torch.ones_like(input_ids)
 
         with torch.no_grad():
