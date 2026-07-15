@@ -1,4 +1,5 @@
 import re
+import statistics
 import sys
 
 import hydra
@@ -99,17 +100,12 @@ def encode_with_context(model: SentenceTransformer, sentences: list[str], query_
     return F.normalize(torch.stack(embeddings), dim=1).cpu().numpy()
 
 
-def cluster_sentences(embeddings: np.ndarray, target_count: int, max_size_multiplier: float) -> list[tuple[int, int]]:
-    """Constrained (adjacent-only) agglomerative clustering: starts with every sentence as its
-    own cluster and repeatedly merges whichever *adjacent* pair is most similar, mean-pooling
-    their embeddings into the merged cluster, until target_count clusters remain.
-
-    Pure greedy merging (always take the globally most-similar adjacent pair) lets one locally
-    homogeneous stretch keep absorbing merges far past the target average size while leaving
-    other stretches comparatively fragmented, since "most similar" is judged globally, not
-    relative to how big each side already is. max_size_multiplier bounds this: a candidate merge
-    is skipped in favor of a less-similar one if it would make a cluster larger than
-    max_size_multiplier times the target average size."""
+def merge_trace(embeddings: np.ndarray) -> list[tuple[int, float]]:
+    """Runs the same adjacent-only greedy agglomerative merge as cluster_sentences_by_zscore, but
+    all the way down to a single cluster, recording one entry per merge in the order performed:
+    (resulting cluster size in sentences, similarity of the pair that was merged). This is what
+    cluster_sentences_by_zscore uses to learn a document's own mean/std merge similarity before
+    deciding where to actually stop."""
     n = len(embeddings)
     starts = list(range(n))
     ends = list(range(1, n + 1))
@@ -121,16 +117,52 @@ def cluster_sentences(embeddings: np.ndarray, target_count: int, max_size_multip
         return float(np.dot(mi, mj))
 
     adjacent_sims = [sim(i, i + 1) for i in range(n - 1)]
-    max_size = max_size_multiplier * (n / target_count)
+    trace = []
+    while len(starts) > 1:
+        best = max(range(len(adjacent_sims)), key=lambda i: adjacent_sims[i])
+        merge_sim = adjacent_sims[best]
+        starts[best : best + 2] = [starts[best]]
+        ends[best : best + 2] = [ends[best + 1]]
+        sums[best : best + 2] = [sums[best] + sums[best + 1]]
+        del adjacent_sims[best]
+        if best > 0:
+            adjacent_sims[best - 1] = sim(best - 1, best)
+        if best < len(starts) - 1:
+            adjacent_sims[best] = sim(best, best + 1)
+        trace.append((ends[best] - starts[best], merge_sim))
+    return trace
 
-    while len(starts) > target_count and len(starts) > 1:
-        candidates = [i for i in range(len(adjacent_sims)) if (ends[i + 1] - starts[i]) <= max_size]
-        if not candidates:
-            # Every remaining adjacent merge would exceed the cap; honoring it would stall
-            # progress entirely, so fall back to the otherwise-best merge for this one step.
-            candidates = range(len(adjacent_sims))
 
-        best = max(candidates, key=lambda i: adjacent_sims[i])
+def cluster_sentences_by_zscore(embeddings: np.ndarray, z_score: float) -> list[tuple[int, int]]:
+    """Adjacent-only agglomerative clustering: starts with every sentence as its own cluster and
+    repeatedly merges whichever *adjacent* pair is most similar, mean-pooling their embeddings
+    into the merged cluster, stopping once the best available adjacent similarity drops more than
+    z_score standard deviations below this document's own mean merge similarity - instead of
+    merging down to a fixed target chunk count. Absolute cosine
+    similarity turned out to be useless as a stopping signal here - measured on real transcripts,
+    even the least-similar merge in a whole document stayed above 0.91, so a fixed threshold like
+    0.8 never fires. Chunk count instead falls out of how topically choppy or smooth *this*
+    document actually is, relative to its own distribution, rather than an externally chosen
+    average sentence count. Runs merge_trace first purely to get that document's own mean/std,
+    then re-merges and stops at the derived cutoff - the two-pass cost is negligible next to the
+    embedding step."""
+    trace = merge_trace(embeddings)
+    sims = [s for _, s in trace]
+    tau = statistics.mean(sims) - z_score * statistics.stdev(sims)
+
+    n = len(embeddings)
+    starts = list(range(n))
+    ends = list(range(1, n + 1))
+    sums = [embeddings[i].copy() for i in range(n)]
+
+    def sim(i: int, j: int) -> float:
+        mi = sums[i] / np.linalg.norm(sums[i])
+        mj = sums[j] / np.linalg.norm(sums[j])
+        return float(np.dot(mi, mj))
+
+    adjacent_sims = [sim(i, i + 1) for i in range(n - 1)]
+    while len(starts) > 1 and max(adjacent_sims) >= tau:
+        best = max(range(len(adjacent_sims)), key=lambda i: adjacent_sims[i])
         starts[best : best + 2] = [starts[best]]
         ends[best : best + 2] = [ends[best + 1]]
         sums[best : best + 2] = [sums[best] + sums[best + 1]]
@@ -149,14 +181,67 @@ def chunk_embeddings_for(embeddings: np.ndarray, ranges: list[tuple[int, int]]) 
     return pooled
 
 
+def merge_short_chunks(embeddings: np.ndarray, ranges: list[tuple[int, int]], min_sentences: int) -> list[tuple[int, int]]:
+    """Eliminates chunks under min_sentences sentences long by merging each one into whichever
+    adjacent chunk its pooled embedding is more similar to. A pure similarity-driven boundary
+    (see cluster_sentences_by_zscore) tends to strand short interjections ("Beautiful!", "Ага.")
+    as their own chunk: they don't embed like the detailed instructional text on either side, so
+    the algorithm reads them as a topic shift in both directions - but a one-word aside isn't a
+    topic of its own and shouldn't be a standalone chunk."""
+    ranges = list(ranges)
+    while len(ranges) > 1:
+        sizes = [end - start for start, end in ranges]
+        shortest = min(range(len(ranges)), key=lambda i: sizes[i])
+        if sizes[shortest] >= min_sentences:
+            break
+
+        pooled = chunk_embeddings_for(embeddings, ranges)
+        if shortest == 0:
+            merge_with = 1
+        elif shortest == len(ranges) - 1:
+            merge_with = shortest - 1
+        else:
+            left_sim = float(np.dot(pooled[shortest], pooled[shortest - 1]))
+            right_sim = float(np.dot(pooled[shortest], pooled[shortest + 1]))
+            merge_with = shortest - 1 if left_sim >= right_sim else shortest + 1
+
+        lo, hi = sorted([shortest, merge_with])
+        ranges[lo : hi + 1] = [(ranges[lo][0], ranges[hi][1])]
+    return ranges
+
+
+def split_long_chunks(
+    sentences: list[str], embeddings: np.ndarray, ranges: list[tuple[int, int]], max_words: int
+) -> list[tuple[int, int]]:
+    """Force-splits any chunk whose sentences total more than max_words words after clustering,
+    cutting at its weakest internal adjacent-sentence link (lowest cosine similarity between two
+    consecutive sentences inside it) rather than an arbitrary midpoint - reusing the same
+    locally-computed similarity signal cluster_sentences_by_zscore is built on, instead of an
+    unrelated cut rule. Word count, not sentence count, is what actually drove the outliers this
+    guards against - a chunk can have very few but very long sentences and still run past 300
+    words, well past where a pooled embedding usefully represents one idea (the same dilution
+    concern max_sentence_words addresses at the raw-sentence level). Splitting can leave an
+    undersized fragment right at a cut's edge (the weakest link can sit next to either end of the
+    chunk) - run merge_short_chunks again afterwards to clean those up."""
+    result = []
+    for start, end in ranges:
+        while end - start > 1 and sum(len(s.split()) for s in sentences[start:end]) > max_words:
+            weakest = min(range(start, end - 1), key=lambda i: float(np.dot(embeddings[i], embeddings[i + 1])))
+            result.append((start, weakest + 1))
+            start = weakest + 1
+        result.append((start, end))
+    return result
+
+
 def chunk_transcript(
     src_path: Path,
     dst_dir: Path,
     model: SentenceTransformer,
     query_prefix: str,
-    avg_sentences: int,
-    max_size_multiplier: float,
     max_sentence_words: int,
+    boundary_z_score: float,
+    min_chunk_sentences: int,
+    max_chunk_words: int,
 ) -> None:
     text = src_path.read_text(encoding="utf-8")
     sentences = split_sentences(text)
@@ -167,8 +252,10 @@ def chunk_transcript(
 
     embeddings = encode_with_context(model, sentences, query_prefix)
 
-    target_count = max(1, len(sentences) // avg_sentences)
-    ranges = cluster_sentences(embeddings, target_count, max_size_multiplier)
+    ranges = cluster_sentences_by_zscore(embeddings, boundary_z_score)
+    ranges = merge_short_chunks(embeddings, ranges, min_chunk_sentences)
+    ranges = split_long_chunks(sentences, embeddings, ranges, max_chunk_words)
+    ranges = merge_short_chunks(embeddings, ranges, min_chunk_sentences)
 
     out_dir = dst_dir / src_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -213,7 +300,14 @@ def main(cfg: DictConfig) -> None:
 
         try:
             chunk_transcript(
-                txt_path, dst_dir, model, cfg.query_prefix, cfg.avg_sentences, cfg.max_size_multiplier, cfg.max_sentence_words
+                txt_path,
+                dst_dir,
+                model,
+                cfg.query_prefix,
+                cfg.max_sentence_words,
+                cfg.boundary_z_score,
+                cfg.min_chunk_sentences,
+                cfg.max_chunk_words,
             )
         except Exception as e:
             # One bad file shouldn't lose progress on the rest of the batch; log it and move on

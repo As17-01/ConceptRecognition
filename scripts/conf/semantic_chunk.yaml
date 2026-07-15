@@ -3,8 +3,6 @@ dst: data/chunks            # folder where chunked transcripts will be saved
 model: intfloat/multilingual-e5-large # largest widely-used multilingual sentence-transformers model (560M, 1024-dim)
 model_dir: models/sentence_transformers # local cache; run scripts/download_embedding_model.py once with internet, then this works fully offline
 query_prefix: "query: "     # e5 models expect inputs prefixed like this, even for symmetric similarity; set to "" for non-e5 models
-# Target cluster count = sentence_count // avg_sentences; tune this as average sentences per chunk.
-avg_sentences: 6
 # Whisper doesn't always add terminal punctuation promptly in run-on speech, so "sentences" can
 # run much longer than a real single-topic sentence. Measured on real preprocessed transcripts:
 # median sentence length is 8 words, p95 is 40, but the tail runs up to 149. Anything over this
@@ -12,13 +10,23 @@ avg_sentences: 6
 # 100+-word span is already well past where a sentence-transformer's pooled embedding represents
 # one idea usefully.
 max_sentence_words: 40
-# Pure greedy merging lets one locally-homogeneous stretch keep absorbing merges far past the
-# target average size while leaving other stretches fragmented; this caps any cluster at
-# max_size_multiplier times the target average size before it's reached. Lower = more
-# uniform chunk sizes but less driven by genuine topic coherence; higher = closer to pure
-# similarity-driven merging (and closer to the uneven sizes that motivated adding this).
-# Measured on a real file: 2.5 barely changed anything (worst case stayed ~176 sentences vs an
-# ~71 target); 1.4 cut that to one ~51-sentence outlier with otherwise even sizes. A cap can't
-# be guaranteed exactly - if every remaining local merge exceeds it, one gets allowed anyway
-# rather than stalling, so rare outliers like that are expected, not a bug to chase to zero.
-max_size_multiplier: 1.4
+# Chunk boundaries are found by adjacent-sentence agglomerative merging that stops once the best
+# remaining merge similarity drops more than boundary_z_score standard deviations below this
+# document's own mean merge similarity (see cluster_sentences_by_zscore) - chunk count falls out
+# of how topically choppy or smooth each specific transcript is, instead of a fixed average
+# sentence count. Absolute cosine similarity doesn't work as a cutoff here: measured on real
+# transcripts, even the least-similar merge in a whole document stayed above 0.91, so this has to
+# be relative to the document's own distribution. Lower = more, smaller chunks (more sensitive to
+# small dips in coherence); higher = fewer, larger chunks. Measured on two real files: 1.0 gave
+# 38-48 chunks averaging ~150 words, comparable across both despite very different content.
+boundary_z_score: 1.0
+# The z-score boundary alone strands short interjections ("Beautiful!", "Ага.") as their own
+# chunk - they don't embed like the instructional text around them, so the algorithm reads them
+# as a topic shift in both directions, even though a one-word aside isn't a topic of its own.
+# Any chunk under this many sentences gets merged into whichever neighbor it's more similar to
+# (see merge_short_chunks).
+min_chunk_sentences: 3
+# A sufficiently coherent stretch may never cross boundary_z_score on its own and can run past
+# 300 words - well past where a pooled embedding usefully represents one idea. Any chunk over
+# this gets force-split at its weakest internal adjacent-sentence link (see split_long_chunks).
+max_chunk_words: 300
