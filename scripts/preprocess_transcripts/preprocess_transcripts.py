@@ -104,7 +104,69 @@ def remove_mixed_script_tokens(words: list[str]) -> list[str]:
     return [w for w in words if not (CYRILLIC_CHAR.search(w) and LATIN_CHAR.search(w))]
 
 
-def restore_punctuation(words: list[str], classifier, window_words: int, overlap_words: int) -> str:
+# RUPunct is trained on monolingual Russian text, so English words (this teacher's dance
+# terminology - "flow", "full body experience", "collapsing"...) are out-of-distribution and
+# distort punctuation/casing decisions right around them. Standing in a common, neutral Russian
+# word wherever a run of purely-Latin words occurs keeps the model on familiar ground; the real
+# phrase is swapped back in afterwards, inheriting whatever casing/punctuation the placeholder
+# was assigned. A whole multi-word run ("full body experience") collapses to a *single*
+# placeholder rather than one per word: several placeholder words in a row is itself unnatural
+# input the model doesn't parse as one noun phrase (it started splitting sentences mid-run),
+# whereas one placeholder sits in the sentence exactly like the single borrowed noun it stands
+# in for. Cycling through several distinct placeholders (rather than reusing one) still matters
+# for runs that are close together but not adjacent, e.g. a list of two separate English terms.
+PLACEHOLDER_WORDS = ["нечто", "оно", "вот", "туда", "тогда"]
+
+
+def is_foreign_word(word: str) -> bool:
+    return bool(LATIN_CHAR.search(word)) and not CYRILLIC_CHAR.search(word)
+
+
+def mask_foreign_words(words: list[str]) -> tuple[list[str], list[bool], list[str]]:
+    """Collapses each contiguous run of foreign words into one placeholder token. Returns the
+    masked word list, a same-length is_masked flag per position, and a same-length display list
+    holding the original word (unmasked positions) or the full original phrase text (masked
+    positions) - is_masked is kept explicit rather than inferred later by comparing against
+    PLACEHOLDER_WORDS, since a genuine Russian word could coincidentally match a placeholder
+    without being a substitution."""
+    masked, is_masked, display, next_placeholder = [], [], [], 0
+    i, n = 0, len(words)
+    while i < n:
+        if is_foreign_word(words[i]):
+            j = i
+            while j < n and is_foreign_word(words[j]):
+                j += 1
+            masked.append(PLACEHOLDER_WORDS[next_placeholder % len(PLACEHOLDER_WORDS)])
+            next_placeholder += 1
+            is_masked.append(True)
+            display.append(" ".join(words[i:j]))
+            i = j
+        else:
+            masked.append(words[i])
+            is_masked.append(False)
+            display.append(words[i])
+            i += 1
+    return masked, is_masked, display
+
+
+def restore_masked_word(formatted: str, placeholder: str, phrase: str) -> str:
+    """formatted is a placeholder word as returned by a LABEL_TO_FORMATTER entry (casing applied,
+    punctuation suffix appended); reapplies the same casing/suffix to the real phrase underneath -
+    capitalizing only the phrase's first word for sentence-initial case, matching how a multi-word
+    term is normally cased in running text."""
+    prefix, suffix = formatted[: len(placeholder)], formatted[len(placeholder) :]
+    if prefix.isupper():
+        text = phrase.upper()
+    elif prefix[:1].isupper():
+        text = phrase.capitalize()
+    else:
+        text = phrase
+    return text + suffix
+
+
+def restore_punctuation(
+    words: list[str], is_masked: list[bool], display_words: list[str], classifier, window_words: int, overlap_words: int
+) -> str:
     """Classifies in overlapping windows and keeps only each window's high-context "core"
     (the model has no context outside the window it's given, so the words right at a window's
     edge are the ones most likely to get punctuated as if sentence-initial when they're not).
@@ -119,7 +181,10 @@ def restore_punctuation(words: list[str], classifier, window_words: int, overlap
     own midpoint is therefore unsafe: a group straddling the seam between two windows can fall
     outside *both* windows' keep range and silently vanish. Reconstructing each window's full
     text first and only then slicing it by plain word position sidesteps this entirely, since
-    that slicing no longer depends on how any window happened to group its words.
+    that slicing no longer depends on how any window happened to group its words. The same
+    per-word alignment is what lets masked positions be swapped back to display_words[i] after
+    formatting: a formatter only ever appends to the end of a (possibly multi-word) group's text,
+    so splitting on whitespace always yields one entry per input word regardless of grouping.
     """
     n_words = len(words)
     if n_words == 0:
@@ -134,6 +199,10 @@ def restore_punctuation(words: list[str], classifier, window_words: int, overlap
         end = min(start + window_words, n_words)
         preds = classifier(" ".join(words[start:end]))
         formatted_words = " ".join(LABEL_TO_FORMATTER.get(p["entity_group"], lambda t: t)(p["word"].strip()) for p in preds).split()
+        formatted_words = [
+            restore_masked_word(fw, words[start + i], display_words[start + i]) if is_masked[start + i] else fw
+            for i, fw in enumerate(formatted_words)
+        ]
 
         local_lo = 0 if start == 0 else half_overlap
         local_hi = (end - start) if end == n_words else (end - start) - half_overlap
@@ -182,7 +251,8 @@ def preprocess_transcript(
     if drop_fillers:
         words = remove_fillers(words)
 
-    restored = restore_punctuation(words, classifier, window_words, overlap_words)
+    masked_words, is_masked, display_words = mask_foreign_words(words)
+    restored = restore_punctuation(masked_words, is_masked, display_words, classifier, window_words, overlap_words)
 
     dst_path = dst_dir / src_path.name
     dst_path.write_text(restored, encoding="utf-8")
