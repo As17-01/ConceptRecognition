@@ -1,6 +1,0 @@
-src: data/chunks            # hierarchical chunks produced by semantic_chunk.py (reads each transcript's hierarchy.json)
-dst: data/concepts          # extracted concept JSON, mirroring src's level/chunk_NNN.txt structure as level/chunk_NNN.json
-model: Qwen/Qwen2.5-32B-Instruct # strong multilingual instruction-following + JSON output; sized for a 40GB+ GPU at 4-bit
-model_dir: models/llm       # local cache; run scripts/extract_concepts/download_llm_model.py once with internet, then this works fully offline
-quantization: 4bit          # 4bit | 8bit | none - 4bit leaves headroom for long broad-level inputs on a 40GB card; raise if you have VRAM to spare
-max_new_tokens: 512         # generation budget per chunk; topic + key_points rarely needs more
