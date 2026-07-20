@@ -22,7 +22,9 @@ dependencies = [
     "accelerate (>=1.0.0,<2.0.0)",
     "bitsandbytes (>=0.41.0,<0.42.0)",
     "hdbscan (>=0.8.44,<0.9.0)",
-    "umap-learn (>=0.5.12,<0.6.0)"
+    "umap-learn (>=0.5.12,<0.6.0)",
+    "anthropic (>=0.117.0,<0.118.0)",
+    "elevenlabs (>=2.58.0,<3.0.0) ; python_version >= \"3.12\" and python_version < \"4.0\""
 ]
 
 

@@ -1,0 +1,10 @@
+src_dir: data/audio                        # real teacher recordings to sample reference audio from
+sample_file: "22 эфир - обк апрель5.mp3"   # which recording to extract clips from
+scratch_dir: data/voice_clone_samples       # trimmed reference clips (gitignored along with the rest of data/)
+num_clips: 3                                # reference clips uploaded for cloning - ElevenLabs' own IVC example uses 3
+clip_seconds: 90                            # length of each reference clip
+voice_name: "Anton (dance instructor)"
+voice_description: >-
+  Male Russian voice, contemporary dance / movement improvisation instructor - calm, instructive tone,
+  with occasional English code-switching for dance terminology (flow, full body experience, curves, ...).
+dst_voice_id_file: data/elevenlabs_voice_id.txt   # written here; synthesize_speech.py reads it from here

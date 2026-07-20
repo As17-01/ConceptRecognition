@@ -1,0 +1,5 @@
+src: data/generated                          # generated class scripts (see generate_class.py)
+dst: data/audio_generated                     # folder where synthesized class audio is saved
+voice_id_file: data/elevenlabs_voice_id.txt   # written by clone_voice.py
+model_id: eleven_multilingual_v2              # explicitly multilingual - needed for Russian + code-switched English
+output_format: mp3_44100_128

@@ -1,0 +1,8 @@
+src: data/preprocessed        # cleaned transcripts (artifact-free, no name placeholders) to draw few-shot examples from
+dst: data/generated            # folder where generated classes (class_001.txt, class_002.txt, ...) are saved
+model: claude-opus-4-8        # see claude-api skill: always use this unless told otherwise
+max_tokens: 16000              # generous headroom; streamed so no HTTP-timeout risk
+num_classes: 5                 # how many classes to generate in this run
+num_examples: 3                # transcripts sampled as few-shot style/content reference, per class
+seed: 0                        # base seed; class i samples examples with seed + i, so each class gets a different reference set
+topic: null                    # optional: e.g. "flow states and points of attention" - applies to every class in the run
