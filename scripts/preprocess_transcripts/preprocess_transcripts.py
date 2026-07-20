@@ -24,8 +24,19 @@ FILLER_WORDS = {"ну", "э", "эм", "эмм", "ммм", "мм", "ыыы", "э�
 CYRILLIC_CHAR = re.compile(r"[А-Яа-яЁё]")
 LATIN_CHAR = re.compile(r"[A-Za-z]")
 
+# Whisper hallucinates YouTube-style subtitle-credit lines mid-transcript (found in 37 of 129
+# files) - always sitting cleanly at a sentence boundary, so removing them doesn't disturb
+# surrounding text. Names vary (editors: "А.Семкин", "М.Лосева"; always "Корректор А.Егорова" so
+# far), and the verb before "DimaTorzok" varies too (делал/сделал/создавал/создал observed) - so
+# this matches both patterns generically (by position, not by enumerating every verb form) rather
+# than hardcoding names or exact wording.
+SUBTITLE_CREDITS = re.compile(
+    r"[Рр]едактор субтитров\s+\S+\s+[Кк]орректор\s+\S+\.?|[Сс]убтитры\s+\S+\s+DimaTorzok\.?"
+)
+
 
 def clean_text(text: str) -> str:
+    text = SUBTITLE_CREDITS.sub(" ", text)
     text = NON_TARGET_CHARS.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 

@@ -1,0 +1,24 @@
+src: data/chunks       # folder of per-transcript chunk_*.txt + embeddings.npy (see semantic_chunk.py)
+dst: data/topics        # folder where chunks grouped by topic will be saved
+# Dimensions UMAP reduces the raw 1024-dim embeddings to before HDBSCAN. Necessary, not optional:
+# measured on the full corpus (4458 chunks), clustering directly on the raw embeddings left ~82%
+# of chunks as noise even with generous HDBSCAN parameters - density estimation degrades badly in
+# high dimensions, and this embedding space is unusually compressed to begin with (pairwise cosine
+# similarity across the whole corpus never drops below ~0.80). Reducing to 10 dimensions cut noise
+# to ~35% at comparable settings.
+umap_components: 10
+# HDBSCAN's core knob: the smallest number of chunks that counts as a real recurring topic rather
+# than noise. Lower = more, smaller/narrower topics (and more sensitivity to loosely-related
+# chunks getting lumped in); higher = fewer, broader topics (and more chunks left unclustered).
+# Measured on the full corpus post-UMAP: 15 gave 76 topics with ~35% noise: a reasonable middle
+# ground between 10 (127 topics, similar noise) and 30 (3 topics, ~3% noise, clearly too coarse).
+min_cluster_size: 15
+# HDBSCAN's min_samples controls how conservative density estimation is (higher = more points
+# treated as noise, more conservative clusters). Measured on the full corpus post-UMAP at
+# min_cluster_size=15: min_samples=1 gave 76 topics/1550 noise, defaulting to min_cluster_size
+# (null) collapsed to just 2 topics/194 noise - 1 is far more useful here.
+min_samples: 1
+# Number of top TF-IDF keywords joined together as each topic's placeholder name (see
+# name_topic_by_keywords) - not a real title, just enough to eyeball what a topic is about until
+# this moves to LLM-generated names.
+name_keywords: 5
