@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onnxruntime"
+version = "1.20.0"
+description = "Stub - no real onnxruntime wheel is installable on this system's glibc; faster-whisper only needs it for its own optional built-in VAD filter, which this project never enables."
+requires-python = ">=3.8"

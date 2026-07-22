@@ -26,12 +26,22 @@ dependencies = [
     "elevenlabs (>=2.58.0,<3.0.0) ; python_version >= \"3.12\" and python_version < \"4.0\"",
     "faster-whisper (>=1.2.1,<2.0.0)",
     "ctranslate2 (==4.6.2)",
-    "av (==14.2.0)"
+    "av (==14.2.0)",
+    "onnxruntime"
 ]
 
 
 [tool.poetry]
 package-mode = false
+
+# No onnxruntime wheel is installable on some deployment targets for this project (e.g. CentOS 7,
+# glibc 2.17 - too old for any onnxruntime release that also supports Python 3.12). It's only a
+# hard dependency of faster-whisper for its own optional built-in VAD filter (vad_filter=True),
+# which this project never enables (VAD is always done separately via torch.hub's Silero VAD) -
+# see vendor/onnxruntime-stub/onnxruntime/__init__.py for the safety argument and what happens if
+# that assumption is ever wrong (a loud, clear ImportError, not silent misbehavior).
+[tool.poetry.dependencies]
+onnxruntime = { path = "vendor/onnxruntime-stub", develop = false }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
