@@ -24,6 +24,11 @@ vad_speech_pad_ms: 100
 # break), as opposed to normal breath/sentence gaps - those are already kept out of the reported
 # segment list in the first place by vad_min_silence_duration_ms. Tunable.
 min_pause_seconds: 8.0
+# Second, lower threshold of the same two-tier system: gaps >= min_micro_pause_seconds but
+# < min_pause_seconds become a "[МИКРОПАУЗА:N]" short-pause marker (a brief settle/breath pause -
+# noticeable but not a full structural break) instead of the full "[ПАУЗА:N]" marker above; gaps
+# below this remain unmarked ordinary speech cadence, same as always.
+min_micro_pause_seconds: 2.0
 
 # Whisper only applies initial_prompt to the first decoding window of a transcribe() call, so a
 # single long uninterrupted monologue would otherwise get the domain vocabulary hint just once,

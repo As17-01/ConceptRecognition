@@ -9,8 +9,8 @@ from pathlib import Path
 from omegaconf import DictConfig
 from elevenlabs.client import ElevenLabs
 
-# Structural pause marker; format defined in transcribe.py - keep in sync.
-PAUSE_RE = re.compile(r"\[ПАУЗА:(\d+)\]")
+# Pause marker (structural or micro); format defined in transcribe.py - keep in sync.
+PAUSE_RE = re.compile(r"\[(?:ПАУЗА|МИКРОПАУЗА):(\d+)\]")
 
 
 def split_segments(text: str) -> list[tuple[str, int]]:

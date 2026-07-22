@@ -12,36 +12,60 @@ from omegaconf import DictConfig
 # hasn't been produced yet - keeps this script runnable before that script's first run.
 DEFAULT_WORDS_PER_MINUTE = 140.0
 DEFAULT_PAUSE_FRACTION = 0.3
+DEFAULT_MICRO_PAUSE_FRACTION = 0.02
 
 
-def compute_targets(stats_path: Path, target_minutes: float) -> tuple[int, int, int]:
+def compute_targets(stats_path: Path, target_minutes: float) -> tuple[int, int, int, int, int]:
     """Derives word-count and pause targets for a class of the requested length, calibrated
     against the real corpus's observed speaking rate and pause behavior when available.
-    Returns (target_words, target_pause_count, target_pause_seconds)."""
+    Returns (target_words, target_pause_count, target_pause_seconds, target_micro_pause_count,
+    target_micro_pause_seconds)."""
     target_total_seconds = target_minutes * 60
 
     if stats_path.is_file():
         stats = json.loads(stats_path.read_text(encoding="utf-8"))
         wpm = stats["words_per_minute"]
-        avg_total_seconds = stats["avg_words"] / wpm * 60 + stats["avg_pause_seconds"]
+        avg_total_seconds = (
+            stats["avg_words"] / wpm * 60 + stats["avg_pause_seconds"] + stats["avg_micro_pause_seconds"]
+        )
         # Only fall back to the default split if the corpus average is degenerate (zero) -
         # a real corpus average, however skewed, is always preferred over the hardcoded guess.
         pause_fraction = stats["avg_pause_seconds"] / avg_total_seconds if avg_total_seconds else DEFAULT_PAUSE_FRACTION
+        micro_pause_fraction = (
+            stats["avg_micro_pause_seconds"] / avg_total_seconds if avg_total_seconds else DEFAULT_MICRO_PAUSE_FRACTION
+        )
         avg_seconds_per_pause = stats["avg_pause_seconds"] / stats["avg_pause_count"] if stats["avg_pause_count"] else None
+        avg_seconds_per_micro_pause = (
+            stats["avg_micro_pause_seconds"] / stats["avg_micro_pause_count"] if stats["avg_micro_pause_count"] else None
+        )
     else:
         wpm = DEFAULT_WORDS_PER_MINUTE
         pause_fraction = DEFAULT_PAUSE_FRACTION
+        micro_pause_fraction = DEFAULT_MICRO_PAUSE_FRACTION
         avg_seconds_per_pause = None
+        avg_seconds_per_micro_pause = None
 
     target_pause_seconds = target_total_seconds * pause_fraction
-    target_speaking_seconds = target_total_seconds - target_pause_seconds
+    target_micro_pause_seconds = target_total_seconds * micro_pause_fraction
+    target_speaking_seconds = target_total_seconds - target_pause_seconds - target_micro_pause_seconds
     target_words = round(target_speaking_seconds / 60 * wpm)
     target_pause_count = (
         round(target_pause_seconds / avg_seconds_per_pause)
         if avg_seconds_per_pause is not None
         else round(target_minutes / 6)  # no corpus pause data - guess roughly one pause every 6 minutes
     )
-    return target_words, target_pause_count, round(target_pause_seconds)
+    target_micro_pause_count = (
+        round(target_micro_pause_seconds / avg_seconds_per_micro_pause)
+        if avg_seconds_per_micro_pause is not None
+        else round(target_minutes * 1.5)  # no corpus micro-pause data - guess roughly 1.5 per minute
+    )
+    return (
+        target_words,
+        target_pause_count,
+        round(target_pause_seconds),
+        target_micro_pause_count,
+        round(target_micro_pause_seconds),
+    )
 
 
 # Instructs Claude to write only the teacher's own instructional monologue - not the
@@ -63,6 +87,12 @@ Insert the literal marker [ПАУЗА:N] (N = an integer number of seconds, e.g.
 a real movement or music break with no narration - the same convention the example transcripts use. Some examples \
 carry these markers throughout and some don't (it depends on how that particular recording was processed), so \
 follow the convention regardless of whether a given example happens to show it.
+
+Also insert the literal marker [МИКРОПАУЗА:N] (N = a small integer number of seconds, e.g. [МИКРОПАУЗА:3]) at \
+brief settle or breath pauses - a short natural break in your speech rhythm between thoughts, not necessarily \
+tied to any physical movement or music break. This is distinct from [ПАУЗА:N]: [ПАУЗА:N] marks a real break with \
+no narration, while [МИКРОПАУЗА:N] marks the kind of short breath a real speaker naturally takes between \
+sentences or ideas while still narrating the class overall.
 
 The output should read as one continuous, flowing class script a student could follow directly - covering a \
 warm-up, a technical or thematic focus, and a natural close - in the teacher's own vocabulary and phrasing style, \
@@ -96,6 +126,8 @@ def build_user_message(
     target_words: int,
     target_pause_count: int,
     target_pause_seconds: int,
+    target_micro_pause_count: int,
+    target_micro_pause_seconds: int,
     target_minutes: float,
 ) -> str:
     ask = "Now write a new, original class script in this teacher's style"
@@ -106,6 +138,10 @@ def build_user_message(
         f" Aim for approximately {target_words} words of spoken narration, with roughly {target_pause_count} "
         f"[ПАУЗА:N] pause markers totaling around {target_pause_seconds // 60} minutes of pause time, so the "
         f"full class (narration plus pauses) comes out to about {target_minutes:g} minutes overall."
+    )
+    ask += (
+        f" Also include roughly {target_micro_pause_count} brief [МИКРОПАУЗА:N] settle/breath pauses, "
+        f"totaling around {target_micro_pause_seconds} seconds."
     )
     return ask
 
@@ -120,13 +156,21 @@ def generate_class(
     target_words: int,
     target_pause_count: int,
     target_pause_seconds: int,
+    target_micro_pause_count: int,
+    target_micro_pause_seconds: int,
     target_minutes: float,
 ) -> str:
     with client.messages.stream(
         model=model,
         max_tokens=max_tokens,
         system=build_system_prompt(examples, digest_path),
-        messages=[{"role": "user", "content": build_user_message(topic, target_words, target_pause_count, target_pause_seconds, target_minutes)}],
+        messages=[{
+            "role": "user",
+            "content": build_user_message(
+                topic, target_words, target_pause_count, target_pause_seconds,
+                target_micro_pause_count, target_micro_pause_seconds, target_minutes,
+            ),
+        }],
     ) as stream:
         message = stream.get_final_message()
     return next(block.text for block in message.content if block.type == "text")
@@ -144,6 +188,8 @@ def generate_one(
     target_words: int,
     target_pause_count: int,
     target_pause_seconds: int,
+    target_micro_pause_count: int,
+    target_micro_pause_seconds: int,
     target_minutes: float,
     dst_path: Path,
 ) -> None:
@@ -156,7 +202,8 @@ def generate_one(
 
     text = generate_class(
         client, examples, model, max_tokens, topic, digest_path,
-        target_words, target_pause_count, target_pause_seconds, target_minutes,
+        target_words, target_pause_count, target_pause_seconds,
+        target_micro_pause_count, target_micro_pause_seconds, target_minutes,
     )
     dst_path.write_text(text, encoding="utf-8")
     print(f"{dst_path.name}: done -> {dst_path}")
@@ -180,7 +227,9 @@ def main(cfg: DictConfig) -> None:
     digest_path = Path(cfg.digest_path)
     # Targets don't vary across classes in the same run, so compute them once rather than
     # re-deriving (and re-reading corpus_stats.json) on every iteration.
-    target_words, target_pause_count, target_pause_seconds = compute_targets(Path(cfg.stats_path), cfg.target_minutes)
+    target_words, target_pause_count, target_pause_seconds, target_micro_pause_count, target_micro_pause_seconds = (
+        compute_targets(Path(cfg.stats_path), cfg.target_minutes)
+    )
 
     client = anthropic.Anthropic()
     succeeded, skipped, failed = 0, 0, 0
@@ -198,7 +247,8 @@ def main(cfg: DictConfig) -> None:
         try:
             generate_one(
                 client, files, cfg.seed + i, cfg.num_examples, cfg.model, cfg.max_tokens, cfg.topic,
-                digest_path, target_words, target_pause_count, target_pause_seconds, cfg.target_minutes,
+                digest_path, target_words, target_pause_count, target_pause_seconds,
+                target_micro_pause_count, target_micro_pause_seconds, cfg.target_minutes,
                 dst_path,
             )
         except Exception as e:

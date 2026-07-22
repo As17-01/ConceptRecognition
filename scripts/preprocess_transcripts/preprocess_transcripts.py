@@ -2,8 +2,6 @@ import re
 import sys
 
 import hydra
-import torch
-import whisper.audio
 
 from pathlib import Path
 from omegaconf import DictConfig
@@ -13,8 +11,8 @@ from omegaconf import DictConfig
 # hallucinates from scripts unrelated to the recording (e.g. stray CJK glyphs). Keep Cyrillic,
 # Latin (English words/code-switching), digits (counting, dates), whitespace, and the punctuation
 # marks actually observed across this corpus's transcripts.
-# Square brackets are reserved for structural markers (e.g. the "[ПАУЗА:N]" pause marker emitted
-# by transcribe.py) - never emitted by Whisper itself. Hyphen kept last (harmless now that
+# Square brackets are reserved for structural markers ("[ПАУЗА:N]" / "[МИКРОПАУЗА:N]", emitted
+# natively by transcribe.py) - never emitted by Whisper itself. Hyphen kept last (harmless now that
 # NON_TARGET_CHARS below runs this through re.escape(), which makes literal-vs-range ordering
 # inside a [...] class a non-issue).
 ALLOWED_PUNCT = ",.!?%—–…«»*':;[]-"
@@ -40,69 +38,10 @@ SUBTITLE_CREDITS = re.compile(
     r"[Рр]едактор субтитров\s+\S+\s+[Кк]орректор\s+\S+\.?|[Сс]убтитры\s+\S+\s+DimaTorzok\.?"
 )
 
-# format defined in transcribe.py - keep in sync
-PAUSE_MARKER_RE = re.compile(r"\[ПАУЗА:(\d+)\]")
-SAMPLE_RATE = 16000  # Silero VAD's expected rate, same as transcribe.py uses
-
-
-def load_vad(vad_model_dir: str):
-    torch.hub.set_dir(vad_model_dir)
-    model, utils = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False, onnx=False)
-    get_speech_timestamps, *_ = utils
-    return model, get_speech_timestamps
-
-
-def detect_pause_fractions(
-    audio_path: Path,
-    vad_model,
-    get_speech_timestamps,
-    vad_threshold: float,
-    vad_min_silence_duration_ms: int,
-    vad_speech_pad_ms: int,
-    min_pause_seconds: float,
-) -> list[tuple[float, int]]:
-    """Returns [(fraction_of_total_VAD_speech_elapsed_before_the_pause, pause_seconds), ...] in
-    ascending fraction order. This is an approximation for backfilling pause markers into
-    transcripts that predate transcribe.py's native pause-marker support: it assumes roughly
-    uniform speaking rate across the file to convert "this pause happened after X% of the total
-    detected speech time" into "insert the marker after X% of the transcript's words" - good
-    enough for downstream few-shot style/pacing reference, not claimed to be exact."""
-    wav = torch.from_numpy(whisper.audio.load_audio(str(audio_path), sr=SAMPLE_RATE))
-    speech_timestamps = get_speech_timestamps(
-        wav,
-        vad_model,
-        sampling_rate=SAMPLE_RATE,
-        threshold=vad_threshold,
-        min_silence_duration_ms=vad_min_silence_duration_ms,
-        speech_pad_ms=vad_speech_pad_ms,
-    )
-    if len(speech_timestamps) < 2:
-        return []
-
-    total_speech = sum(ts["end"] - ts["start"] for ts in speech_timestamps)
-    min_pause_samples = int(min_pause_seconds * SAMPLE_RATE)
-    pauses = []
-    cumulative = 0
-    for i, ts in enumerate(speech_timestamps):
-        if i > 0:
-            gap = ts["start"] - speech_timestamps[i - 1]["end"]
-            if gap >= min_pause_samples:
-                pauses.append((cumulative / total_speech, round(gap / SAMPLE_RATE)))
-        cumulative += ts["end"] - ts["start"]
-    return pauses
-
-
-def insert_pause_markers(words: list[str], pauses: list[tuple[float, int]]) -> list[str]:
-    """Inserts a "[ПАУЗА:N]" token into the word list at the position proportional to how far
-    through the total VAD speech time each real pause occurred (see detect_pause_fractions).
-    offset tracks how many markers have already been inserted so later insertion indices
-    correctly account for the words list having grown."""
-    result = list(words)
-    total_words = len(words)
-    for offset, (fraction, pause_seconds) in enumerate(pauses):
-        index = min(round(fraction * total_words) + offset, len(result))
-        result.insert(index, f"[ПАУЗА:{pause_seconds}]")
-    return result
+# format defined in transcribe.py - keep in sync. Matches either marker type (structural
+# "[ПАУЗА:N]" or short "[МИКРОПАУЗА:N]") - transcribe.py emits these natively now, this file just
+# needs to let them survive cleaning untouched, not backfill them.
+PAUSE_MARKER_RE = re.compile(r"\[(?:ПАУЗА|МИКРОПАУЗА):(\d+)\]")
 
 
 def clean_text(text: str) -> str:
@@ -163,43 +102,12 @@ def preprocess_transcript(
     repeat_min_count: int,
     drop_fillers: bool,
     drop_mixed_script: bool,
-    audio_src: Path,
-    vad_model,
-    get_speech_timestamps,
-    vad_threshold: float,
-    vad_min_silence_duration_ms: int,
-    vad_speech_pad_ms: int,
-    min_pause_seconds: float,
 ) -> None:
     text = src_path.read_text(encoding="utf-8")
     words = clean_text(text).split()
     if not words:
         print(f"{src_path.name}: no words found, skipping")
         return
-
-    # Fresh transcribe.py runs already embed real markers natively - only legacy transcripts
-    # (predating that support) get VAD-only backfill, so a file with a marker is left untouched.
-    if not PAUSE_MARKER_RE.search(text):
-        audio_path = audio_src / f"{src_path.stem}.mp3"
-        if audio_path.exists():
-            try:
-                pauses = detect_pause_fractions(
-                    audio_path,
-                    vad_model,
-                    get_speech_timestamps,
-                    vad_threshold,
-                    vad_min_silence_duration_ms,
-                    vad_speech_pad_ms,
-                    min_pause_seconds,
-                )
-                if pauses:
-                    words = insert_pause_markers(words, pauses)
-            except Exception as e:
-                # A corrupt audio file or VAD failure for one recording shouldn't fail that
-                # file's entire preprocessing - just carry on without markers.
-                print(f"{src_path.name}: VAD pause backfill failed: {e}", file=sys.stderr)
-        else:
-            print(f"{src_path.name}: no matching audio at {audio_path}, skipping pause backfill")
 
     if drop_mixed_script:
         words = remove_mixed_script_tokens(words)
@@ -227,12 +135,6 @@ def main(cfg: DictConfig) -> None:
         return
 
     dst_dir.mkdir(parents=True, exist_ok=True)
-    audio_src = Path(cfg.audio_src)
-
-    # Loaded once up front (same pattern as transcribe.py) rather than per-file - Silero VAD is
-    # small/cheap, but there's no reason to reload it 129 times.
-    print(f"Loading Silero VAD model from '{cfg.vad_model_dir}'...")
-    vad_model, get_speech_timestamps = load_vad(cfg.vad_model_dir)
 
     succeeded, skipped, failed = 0, 0, 0
     for txt_path in txt_files:
@@ -253,13 +155,6 @@ def main(cfg: DictConfig) -> None:
                 cfg.repeat_min_count,
                 cfg.remove_fillers,
                 cfg.remove_mixed_script,
-                audio_src,
-                vad_model,
-                get_speech_timestamps,
-                cfg.vad_threshold,
-                cfg.vad_min_silence_duration_ms,
-                cfg.vad_speech_pad_ms,
-                cfg.min_pause_seconds,
             )
         except Exception as e:
             # One bad file shouldn't lose progress on the rest of the batch; log it and move on

@@ -18,16 +18,17 @@ def load_vad(vad_model_dir: str):
     return model, get_speech_timestamps, collect_chunks
 
 
-def pack_speech_chunks(speech_timestamps: list[dict], max_samples: int, min_pause_samples: int) -> list[dict]:
+def pack_speech_chunks(speech_timestamps: list[dict], max_samples: int, min_split_samples: int) -> list[dict]:
     """Greedily groups VAD speech segments (in original order) into chunks no longer than
     max_samples of *speech* audio each, splitting any single segment that alone exceeds
     max_samples. This bounds how long Whisper goes without a fresh initial_prompt seed. Also
     splits a new group whenever the gap since the previous segment is at least
-    min_pause_samples - these are real, VAD-confirmed silences (VAD already merges anything
-    below vad_min_silence_duration_ms into one segment) long enough to be a structural pause
-    (movement/music with no narration) rather than a normal breath/sentence gap. Each returned
-    group carries "pause_before": the sample-length of that real pause immediately preceding it
-    (0 for the first group, and for splits caused only by max_samples overflow)."""
+    min_split_samples - these are real, VAD-confirmed silences (VAD already merges anything
+    below vad_min_silence_duration_ms into one segment). min_split_samples is the lower of the
+    two pause thresholds, so every gap worth marking as EITHER pause type becomes its own group
+    boundary - the caller classifies each boundary's exact gap length into the right marker text.
+    Each returned group carries "pause_before": the sample-length of that real pause immediately
+    preceding it (0 for the first group, and for splits caused only by max_samples overflow)."""
     groups = []
     current, current_len = [], 0
     pending_pause = 0
@@ -41,7 +42,7 @@ def pack_speech_chunks(speech_timestamps: list[dict], max_samples: int, min_paus
 
     for ts in speech_timestamps:
         gap = ts["start"] - prev_end if prev_end is not None else 0
-        is_real_pause = prev_end is not None and gap >= min_pause_samples
+        is_real_pause = prev_end is not None and gap >= min_split_samples
         seg_len = ts["end"] - ts["start"]
 
         if seg_len > max_samples:
@@ -99,6 +100,7 @@ def transcribe_mp3(
     vad_speech_pad_ms: int,
     max_chunk_seconds: float,
     min_pause_seconds: float,
+    min_micro_pause_seconds: float,
 ) -> tuple[str, int, int]:
     wav = torch.from_numpy(whisper.audio.load_audio(str(mp3_path), sr=SAMPLE_RATE))
     speech_timestamps = get_speech_timestamps(
@@ -115,15 +117,19 @@ def transcribe_mp3(
 
     max_samples = int(max_chunk_seconds * SAMPLE_RATE)
     min_pause_samples = int(min_pause_seconds * SAMPLE_RATE)
-    chunk_groups = pack_speech_chunks(speech_timestamps, max_samples, min_pause_samples)
+    min_micro_pause_samples = int(min_micro_pause_seconds * SAMPLE_RATE)
+    chunk_groups = pack_speech_chunks(speech_timestamps, max_samples, min_micro_pause_samples)
 
     chunk_texts, total_kept, total_dropped = [], 0, 0
     for group in chunk_groups:
         if group["pause_before"] > 0:
-            # Structural pause marker; format defined in transcribe.py - keep in sync.
+            # Pause marker (structural or micro); format defined in transcribe.py - keep in sync.
             # A standalone entry so " ".join(...) below places it as its own atomic token.
             pause_seconds = round(group["pause_before"] / SAMPLE_RATE)
-            chunk_texts.append(f"[ПАУЗА:{pause_seconds}]")
+            if group["pause_before"] >= min_pause_samples:
+                chunk_texts.append(f"[ПАУЗА:{pause_seconds}]")
+            else:
+                chunk_texts.append(f"[МИКРОПАУЗА:{pause_seconds}]")
 
         audio = collect_chunks(group["segments"], wav).numpy()
         result = model.transcribe(
@@ -161,6 +167,7 @@ def transcribe_mp3s(
     vad_speech_pad_ms: int,
     max_chunk_seconds: float,
     min_pause_seconds: float,
+    min_micro_pause_seconds: float,
 ) -> None:
     mp3_files = list(src_dir.glob("*.mp3"))
     if not mp3_files:
@@ -205,6 +212,7 @@ def transcribe_mp3s(
                 vad_speech_pad_ms,
                 max_chunk_seconds,
                 min_pause_seconds,
+                min_micro_pause_seconds,
             )
         except Exception as e:
             # One bad file (corrupt audio, an unexpected edge case) shouldn't lose progress on
@@ -247,6 +255,7 @@ def main(cfg: DictConfig) -> None:
         cfg.vad_speech_pad_ms,
         cfg.max_chunk_seconds,
         cfg.min_pause_seconds,
+        cfg.min_micro_pause_seconds,
     )
 
 

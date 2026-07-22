@@ -11,16 +11,7 @@ repeat_min_count: 3          # an n-gram must repeat at least this many times in
 remove_fillers: true         # drop standalone disfluencies (ну, эм, ммм, ...); never touches English words or digits
 remove_mixed_script: true    # drop tokens that glue Cyrillic and Latin letters together (e.g. "бедраader"); a reliable hallucination signature
 
-# VAD-only pause-marker backfill for legacy transcripts (produced before transcribe.py emitted
-# "[ПАУЗА:N]" natively) - these files are not being re-transcribed with Whisper just to gain
-# markers, so an approximate marker position is inferred from Silero VAD alone. Files that already
-# contain a native marker are left untouched. The vad_* and min_pause_seconds values below are
-# kept in sync with scripts/conf/transcribe.yaml's VAD settings by convention (duplicated, not
-# shared - this repo's hydra configs are independent per script), so a fresh Whisper run and a
-# VAD-only backfill treat "what counts as a real pause" the same way.
-audio_src: data/audio            # folder containing the original MP3s, used to find each legacy transcript's matching audio for VAD backfill
-vad_model_dir: models/silero_vad # local cache for the Silero VAD model; same cache transcribe.py already populates, no re-download needed
-vad_threshold: 0.5               # speech-probability cutoff per audio frame
-vad_min_silence_duration_ms: 500 # minimum silence length before VAD reports a gap between speech segments
-vad_speech_pad_ms: 100           # padding added around each detected speech segment
-min_pause_seconds: 8.0           # gap between VAD speech segments, in seconds, treated as a structural pause worth backfilling a marker for
+# No VAD-based pause backfill here - the whole corpus is being re-transcribed with transcribe.py's
+# native "[ПАУЗА:N]" / "[МИКРОПАУЗА:N]" marker support instead, so every transcript this script
+# sees will already carry real markers straight from Whisper. This stage's only job regarding
+# markers is to let them survive cleaning untouched (see ALLOWED_PUNCT / PAUSE_MARKER_RE above).
