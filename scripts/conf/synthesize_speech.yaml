@@ -3,3 +3,4 @@ dst: data/audio_generated                     # folder where synthesized class a
 voice_id_file: data/elevenlabs_voice_id.txt   # written by clone_voice.py
 model_id: eleven_multilingual_v2              # explicitly multilingual - needed for Russian + code-switched English
 output_format: mp3_44100_128
+scratch_dir: data/tts_scratch                 # temp WAV pieces for pause-aware concat (gitignored along with the rest of data/)

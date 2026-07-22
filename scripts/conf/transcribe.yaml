@@ -19,6 +19,11 @@ vad_min_silence_duration_ms: 500
 # collect_chunks() now splices many segments together, a tighter pad risks clipping word
 # onsets/offsets right at the splice points. A bit more headroom costs a few ms of silence/frame.
 vad_speech_pad_ms: 100
+# Threshold, in real elapsed seconds between two VAD-detected speech segments, above which the
+# gap is treated as a structural pause worth marking in the transcript (e.g. a movement/music
+# break), as opposed to normal breath/sentence gaps - those are already kept out of the reported
+# segment list in the first place by vad_min_silence_duration_ms. Tunable.
+min_pause_seconds: 8.0
 
 # Whisper only applies initial_prompt to the first decoding window of a transcribe() call, so a
 # single long uninterrupted monologue would otherwise get the domain vocabulary hint just once,
