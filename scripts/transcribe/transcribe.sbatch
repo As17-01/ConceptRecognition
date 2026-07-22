@@ -19,8 +19,11 @@ cd "$SLURM_SUBMIT_DIR"
 # Model weights must already be present in models/whisper and models/silero_vad (run
 # scripts/transcribe/download_whisper_model.py and scripts/transcribe/download_vad_model.py once
 # on a machine with internet access, then copy the whole repo, including models/, to the cluster).
-if [ ! -f "models/whisper/large-v3.pt" ]; then
-    echo "models/whisper/large-v3.pt not found. Run scripts/transcribe/download_whisper_model.py with internet access first." >&2
+# faster-whisper caches the converted model via huggingface_hub's standard layout
+# (models--<org>--<repo>/snapshots/<commit-hash>/model.bin) rather than a single flat file, and
+# the commit hash isn't known ahead of time, so this checks for any model.bin under that layout.
+if ! compgen -G "models/whisper/models--*/snapshots/*/model.bin" > /dev/null; then
+    echo "No cached model.bin found under models/whisper. Run scripts/transcribe/download_whisper_model.py with internet access first." >&2
     exit 1
 fi
 if [ ! -d "models/silero_vad" ]; then

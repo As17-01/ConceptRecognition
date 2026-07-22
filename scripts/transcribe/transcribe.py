@@ -19,7 +19,13 @@ def load_vad(vad_model_dir: str):
 
 
 def load_model(model_name: str, model_dir: Path, device: str, compute_type: str) -> BatchedInferencePipeline:
-    base_model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=str(model_dir))
+    # local_files_only=True: this is meant to run on GPU compute nodes that may have no internet
+    # access at all (see download_whisper_model.py / transcribe.sbatch's whole "download once with
+    # internet, then run offline" design) - without this, a cache hit still normally triggers a
+    # network call to check for updates, which would hang or fail outright on an offline node.
+    base_model = WhisperModel(
+        model_name, device=device, compute_type=compute_type, download_root=str(model_dir), local_files_only=True
+    )
     return BatchedInferencePipeline(model=base_model)
 
 
