@@ -23,22 +23,51 @@ def load_model(model_name: str, model_dir: Path, device: str, compute_type: str)
     return BatchedInferencePipeline(model=base_model)
 
 
-def split_into_clips(speech_timestamps: list[dict], max_clip_samples: int) -> list[dict]:
-    """Splits any VAD segment longer than max_clip_samples into consecutive sub-clips. Passing
-    clip_timestamps explicitly to transcribe() (done below, so our own VAD - not faster-whisper's
-    internal one - decides what counts as speech) bypasses its own <=30s auto-chunking entirely:
-    each clip_timestamps entry becomes exactly one model window, and a window longer than the
-    model's fixed 30-second input is silently truncated (only the first 30s transcribed, the rest
-    dropped) rather than raising an error. This has nothing to do with real pauses - it's purely
-    to stay under that hard limit - so it must not be confused with classify_pause_events below,
-    which operates on the original, unsplit speech_timestamps."""
+def build_clips(speech_timestamps: list[dict], max_clip_samples: int) -> list[dict]:
+    """Greedily merges consecutive VAD segments into clips spanning up to max_clip_samples of real
+    elapsed time each (bounded by wall-clock span, not speech-content time - unlike the old
+    spliced-audio design, a small gap between two merged segments is included as-is, as a brief
+    stretch of real silence). This gives Whisper continuous context across small natural pauses
+    instead of transcribing every breath-separated burst in total isolation; a gap large enough
+    that including it would blow the budget simply starts a new clip instead. Also splits any
+    single VAD segment that alone exceeds max_clip_samples, since passing clip_timestamps
+    explicitly (done below, so our own VAD - not faster-whisper's internal one - decides what
+    counts as speech) bypasses its own <=30s auto-chunking entirely: a clip longer than the
+    model's fixed 30-second window is silently truncated (only the first 30s transcribed, the
+    rest dropped) rather than raising an error.
+
+    This is unrelated to pause-marker placement (see classify_pause_events below), which always
+    uses the original, unmerged VAD segment boundaries regardless of how clips are grouped here -
+    a small in-between gap absorbed into one clip can still get its own marker if it qualifies."""
     clips = []
+    clip_start = None
+    prev_end = None
     for ts in speech_timestamps:
-        start = ts["start"]
-        while start < ts["end"]:
-            end = min(start + max_clip_samples, ts["end"])
-            clips.append({"start": start, "end": end})
-            start = end
+        seg_len = ts["end"] - ts["start"]
+
+        if seg_len > max_clip_samples:
+            if clip_start is not None:
+                clips.append({"start": clip_start, "end": prev_end})
+                clip_start = None
+            start = ts["start"]
+            while start < ts["end"]:
+                end = min(start + max_clip_samples, ts["end"])
+                clips.append({"start": start, "end": end})
+                start = end
+            prev_end = ts["end"]
+            continue
+
+        if clip_start is None:
+            clip_start = ts["start"]
+        elif ts["end"] - clip_start > max_clip_samples:
+            clips.append({"start": clip_start, "end": prev_end})
+            clip_start = ts["start"]
+
+        prev_end = ts["end"]
+
+    if clip_start is not None:
+        clips.append({"start": clip_start, "end": prev_end})
+
     return clips
 
 
@@ -93,6 +122,9 @@ def transcribe_mp3(
     min_pause_seconds: float,
     min_micro_pause_seconds: float,
     batch_size: int,
+    hotwords: str,
+    hallucination_silence_threshold: float,
+    without_timestamps: bool,
 ) -> tuple[str, int, int]:
     wav = decode_audio(str(mp3_path), sampling_rate=SAMPLE_RATE)
     speech_timestamps = get_speech_timestamps(
@@ -108,7 +140,7 @@ def transcribe_mp3(
         speech_timestamps = [{"start": 0, "end": len(wav)}]
 
     pause_events = classify_pause_events(speech_timestamps, min_pause_seconds, min_micro_pause_seconds)
-    clips = split_into_clips(speech_timestamps, int(max_clip_seconds * SAMPLE_RATE))
+    clips = build_clips(speech_timestamps, int(max_clip_seconds * SAMPLE_RATE))
     clip_timestamps = [{"start": c["start"] / SAMPLE_RATE, "end": c["end"] / SAMPLE_RATE} for c in clips]
 
     # One call for the whole file: batch_size controls how many of the (potentially many, since
@@ -122,12 +154,15 @@ def transcribe_mp3(
         wav,
         language=language,
         initial_prompt=initial_prompt,
+        hotwords=hotwords,
         condition_on_previous_text=condition_on_previous_text,
         beam_size=5,
         best_of=5,
         vad_filter=False,
         clip_timestamps=clip_timestamps,
         batch_size=batch_size,
+        hallucination_silence_threshold=hallucination_silence_threshold,
+        without_timestamps=without_timestamps,
     )
 
     chunk_texts, total_kept, total_dropped, event_idx = [], 0, 0, 0
@@ -172,6 +207,9 @@ def transcribe_mp3s(
     min_pause_seconds: float,
     min_micro_pause_seconds: float,
     batch_size: int,
+    hotwords: str,
+    hallucination_silence_threshold: float,
+    without_timestamps: bool,
 ) -> None:
     mp3_files = list(src_dir.glob("*.mp3"))
     if not mp3_files:
@@ -217,6 +255,9 @@ def transcribe_mp3s(
                 min_pause_seconds,
                 min_micro_pause_seconds,
                 batch_size,
+                hotwords,
+                hallucination_silence_threshold,
+                without_timestamps,
             )
         except Exception as e:
             # One bad file (corrupt audio, an unexpected edge case) shouldn't lose progress on
@@ -263,6 +304,9 @@ def main(cfg: DictConfig) -> None:
         cfg.min_pause_seconds,
         cfg.min_micro_pause_seconds,
         cfg.batch_size,
+        cfg.hotwords,
+        cfg.hallucination_silence_threshold,
+        cfg.without_timestamps,
     )
 
 

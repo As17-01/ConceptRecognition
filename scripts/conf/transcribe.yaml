@@ -64,8 +64,35 @@ condition_on_previous_text: false
 # Biases Whisper's vocabulary toward the speaker's actual jargon (movement/dance terms,
 # code-switched English) to reduce mid-word hallucinations like "бедраader" or "chamber today".
 # Only strongly affects the first ~224 tokens of context; extend/adjust as you spot recurring
-# mis-transcriptions in new recordings.
+# mis-transcriptions in new recordings. The English terms after "vibe" were mined from the actual
+# 129-file corpus (counted frequency of pure-English tokens across data/transcriptions, excluding
+# generic filler words and the "DimaTorzok" subtitle-hallucination artifact) - these are the most
+# common recurring code-switched terms not already covered above.
 initial_prompt: >-
   Практика контемпорари и двигательной импровизации. Термины: вытяжение, ось, текстура, импульс,
   амплитуда, многозадачность, бедра, копчик, кагами, thread of the arms, thread of the legs,
-  full body experience, range, flow, vibe.
+  full body experience, range, flow, vibe, movement, body, curves, sensation, floating, space,
+  attention, spine, breath, chain, suspension, groove, energy, tension, quality, explore.
+# A faster-whisper-specific mechanism (not available in the original openai-whisper library):
+# biases decoding toward these terms without consuming any of initial_prompt's limited context
+# budget. Reuses the same mined vocabulary as a second, complementary lever - unlike
+# initial_prompt (a natural-language hint applied once per clip), hotwords is a flat term list
+# with its own dedicated biasing mechanism.
+hotwords: >-
+  контемпорари импровизация вытяжение ось текстура импульс амплитуда многозадачность бедра копчик
+  кагами thread of the arms thread of the legs full body experience range flow vibe movement body
+  curves sensation floating space attention spine breath chain suspension groove energy tension
+  quality explore
+# Newer, dedicated anti-hallucination lever (not available in the original openai-whisper
+# library): if the model detects a likely-silent stretch longer than this many seconds partway
+# through a clip's decoding, it treats whatever text follows with more skepticism. Complements
+# (doesn't replace) the VAD stripping and max_no_speech_prob/min_avg_logprob/max_compression_ratio
+# post-hoc filtering above, which catch different failure shapes.
+hallucination_silence_threshold: 2.0
+# Full timestamp-token decoding (matches the original openai-whisper behavior) rather than
+# BatchedInferencePipeline's own default (true, "only sample text tokens") - the batched default
+# is faster (likely easier to parallelize across a batch) but means a clip more often comes back
+# as one undivided segment, so keep_segment's hallucination filtering can only accept/reject an
+# entire clip at once instead of a bad sub-segment within it. Quality over speed per current
+# priorities; flip to true if the speed cost turns out to matter more in practice.
+without_timestamps: false
