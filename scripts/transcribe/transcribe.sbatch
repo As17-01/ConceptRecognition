@@ -31,4 +31,11 @@ if [ ! -d "models/silero_vad" ]; then
     exit 1
 fi
 
+# ctranslate2's bundled cuDNN only ships the top-level dispatcher library; cuDNN 9.x's actual
+# operation libraries (libcudnn_ops.so.9 etc.) are dlopen'd at runtime and won't be found unless
+# their directory is on LD_LIBRARY_PATH (see pyproject.toml's nvidia-cudnn-cu12 comment for the
+# full explanation). Resolved dynamically since the pip install location varies by environment.
+CUDNN_LIB_DIR=$(poetry run python -c "import nvidia.cudnn, os; print(os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'))")
+export LD_LIBRARY_PATH="$CUDNN_LIB_DIR:$LD_LIBRARY_PATH"
+
 poetry run python scripts/transcribe/transcribe.py
