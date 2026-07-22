@@ -1,7 +1,9 @@
 src: data/audio          # folder containing MP3 files
 dst: data/transcriptions # folder where text files will be saved
-model: large-v3           # ~1.5GB RAM on CPU; large-v3 needs ~6GB which is too tight for a 7.5GB machine
-model_dir: models/whisper # local cache for model weights; run scripts/transcribe/download_whisper_model.py once with internet, then this works fully offline
+model: large-v3           # faster-whisper resolves this to the CTranslate2-converted checkpoint automatically
+model_dir: models/whisper # local cache for the converted model weights; downloaded automatically on first run
+device: cuda              # "cuda" for a GPU box, "cpu" for local testing on this machine
+compute_type: float16     # float16 is the standard GPU choice (fast, no meaningful quality loss); use "int8" or "float32" on CPU
 language: ru              # primary language of the recordings
 
 # Voice-activity detection trims music/silence before Whisper ever sees it - the single
@@ -12,13 +14,27 @@ vad_threshold: 0.5               # speech-probability cutoff per audio frame; ra
 # Library default (100ms) fragments continuous speech into many sub-2s segments on every
 # micro-pause/breath; measured on a real file, raising this to 500ms cut segment count from
 # 135 to 57 over a 10-minute sample with a much healthier median length (4.3s vs 2.6s).
-# Matters because collect_chunks() physically splices segments together when packing chunks -
-# fewer, more natural splice points means less risk of unnatural-sounding joins.
 vad_min_silence_duration_ms: 500
-# Silero's default (30ms) leaves little buffer around each detected speech segment; since
-# collect_chunks() now splices many segments together, a tighter pad risks clipping word
-# onsets/offsets right at the splice points. A bit more headroom costs a few ms of silence/frame.
+# Silero's default (30ms) leaves little buffer around each detected speech segment; a tighter pad
+# risks clipping word onsets/offsets right at clip boundaries. A bit more headroom costs a few ms
+# of silence/frame.
 vad_speech_pad_ms: 100
+
+# transcribe.py hands faster-whisper each VAD speech segment explicitly (as clip_timestamps),
+# which bypasses its own internal <=30s auto-chunking entirely - a single clip longer than the
+# model's fixed 30-second window gets silently truncated (only the first 30s transcribed) rather
+# than an error, so any VAD segment longer than this is pre-split into consecutive sub-clips here.
+# Kept a bit under Whisper's native 30s window for margin. This has nothing to do with pause
+# markers (which key off min_pause_seconds/min_micro_pause_seconds below) or with re-seeding
+# initial_prompt - faster-whisper's batched pipeline re-applies initial_prompt fresh to every
+# clip regardless of how many there are, so splitting a long segment here doesn't affect that.
+max_clip_seconds: 28
+# Batched transcription: instead of decoding one clip at a time, faster-whisper processes this
+# many clips together per forward pass on the GPU. Every VAD-detected speech burst is its own
+# clip, so a typical file has plenty to batch - raise this if GPU memory allows, for more
+# throughput; lower it if you hit an out-of-memory error.
+batch_size: 16
+
 # Threshold, in real elapsed seconds between two VAD-detected speech segments, above which the
 # gap is treated as a structural pause worth marking in the transcript (e.g. a movement/music
 # break), as opposed to normal breath/sentence gaps - those are already kept out of the reported
@@ -29,13 +45,6 @@ min_pause_seconds: 8.0
 # noticeable but not a full structural break) instead of the full "[ПАУЗА:N]" marker above; gaps
 # below this remain unmarked ordinary speech cadence, same as always.
 min_micro_pause_seconds: 2.0
-
-# Whisper only applies initial_prompt to the first decoding window of a transcribe() call, so a
-# single long uninterrupted monologue would otherwise get the domain vocabulary hint just once,
-# at the very start. Packing VAD speech segments into chunks capped at this length and calling
-# transcribe() per chunk re-seeds initial_prompt regularly, making it act like persistent
-# background knowledge instead of a one-shot hint. Kept a bit under Whisper's native 30s window.
-max_chunk_seconds: 28
 
 # Segments Whisper itself is unsure about get dropped instead of written out, catching
 # hallucinations VAD doesn't (e.g. mid-speech mistranscriptions). Tune by inspecting
