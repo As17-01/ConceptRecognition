@@ -1,10 +1,42 @@
 src_dir: data/audio                        # real teacher recordings to sample reference audio from
-sample_file: "22 эфир - обк апрель5.mp3"   # which recording to extract clips from
-scratch_dir: data/voice_clone_samples       # trimmed reference clips (gitignored along with the rest of data/)
-num_clips: 3                                # reference clips uploaded for cloning - ElevenLabs' own IVC example uses 3
-clip_seconds: 90                            # length of each reference clip
+
+# Reference-audio sampling for cloning. ElevenLabs IVC improves markedly with more (and more
+# varied) reference material, so instead of clipping a single recording we spread clips across
+# several different recordings - this averages out per-recording mic/room differences and gives
+# the clone a more robust sense of the voice.
+#
+# sample_files: optional explicit list of filenames under src_dir. When null, num_source_files
+# recordings are auto-picked evenly spread across the sorted recordings, for variety across dates.
+# Keep clips_per_file * (len(sample_files) or num_source_files) <= 25 (ElevenLabs' IVC file cap).
+sample_files: null
+num_source_files: 6                        # recordings to draw from when sample_files is null
+clips_per_file: 3                          # reference clips extracted per recording
+clip_seconds: 60                           # length of each reference clip (seconds)
+
+# Sample from the opening of each recording, before background music typically kicks in. Mid-file
+# clips often land on loud music, which degrades cloning (wrong timbre/gender, muddy reference).
+skip_start_seconds: 30                     # skip the very first seconds (mic check / "привет")
+early_window_seconds: 480                  # only sample within this many seconds from skip_start (8 min)
+
 voice_name: "Anton (dance instructor)"
 voice_description: >-
   Male Russian voice, contemporary dance / movement improvisation instructor - calm, instructive tone,
   with occasional English code-switching for dance terminology (flow, full body experience, curves, ...).
+# ElevenLabs IVC requires labels as a JSON object (language/accent/gender/age) - omitting them makes the
+# SDK send "null", which the API rejects with invalid_labels.
+voice_labels:
+  language: ru
+  gender: male
+scratch_dir: data/voice_clone_samples             # trimmed reference clips (gitignored along with the rest of data/)
 dst_voice_id_file: data/elevenlabs_voice_id.txt   # written here; synthesize_speech.py reads it from here
+
+# Cherry-pick mode: when non-empty, upload these existing clips from scratch_dir and skip
+# re-extraction entirely (nothing in scratch_dir is overwritten). Filenames only, relative to
+# scratch_dir. Leave null to auto-extract fresh clips from src_dir as before.
+# selected_clips: null
+# Example after listening and picking the best ones:
+selected_clips:
+  - sample_0.mp3
+  - sample_3.mp3
+  - sample_9.mp3
+  - sample_12.mp3

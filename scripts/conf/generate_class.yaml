@@ -9,3 +9,26 @@ topic: null                    # optional: e.g. "flow states and points of atten
 digest_path: data/corpus_digest.txt   # corpus-wide style/content patterns written by summarize_corpus.py; folded into the system prompt if present, skipped silently otherwise
 stats_path: data/corpus_stats.json    # per-corpus word/pause stats written by summarize_corpus.py; calibrates word/pause targets, falls back to hardcoded defaults if missing
 target_minutes: 60             # how long the FINAL AUDIO (after text-to-speech, including realized pause durations) should end up being - around 1 hour, maybe a little longer, per product requirement
+
+# Make the class roomier than the raw corpus average: these multiply the corpus's natural pause /
+# micro-pause share of the class, giving more and longer breaks for movement and breath (narration
+# shrinks to keep the same target_minutes). 1.0 = corpus-natural; >1 = more space. Clamped in code
+# so pauses can never crowd out most of the actual speech.
+pause_scale: 1.5               # more and longer structural [ПАУЗА:N] movement/music breaks
+micro_pause_scale: 1.4         # more frequent brief [МИКРОПАУЗА:N] settle/breath pauses
+
+# Each class is written as a sequence of continuation passes rather than one shot: a single Opus
+# call reliably under-produces on a full ~5000-word Russian narration (came out ~half length), so
+# the class is built section by section in a multi-turn conversation, with the total word/pause
+# targets split across sections by weight. Each section is a comfortably-sized generation the model
+# actually completes, and the running conversation keeps it flowing as one coherent class. Weights
+# are normalized automatically, so they need not sum to exactly 1.
+sections:
+  - name: "разминка / warm-up: arrival, breath, grounding, first gentle mobilizations"
+    weight: 0.22
+  - name: "основная часть I: the main technical or thematic exploration of the class"
+    weight: 0.30
+  - name: "основная часть II: development - phrases, traveling, imagery, deeper play with the theme"
+    weight: 0.28
+  - name: "заключение / close: integration, cool-down, settling, and a natural ending"
+    weight: 0.20

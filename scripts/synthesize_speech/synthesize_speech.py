@@ -8,6 +8,7 @@ import hydra
 from pathlib import Path
 from omegaconf import DictConfig
 from elevenlabs.client import ElevenLabs
+from elevenlabs.types import VoiceSettings
 
 # Pause marker (structural or micro); format defined in transcribe.py - keep in sync.
 PAUSE_RE = re.compile(r"\[(?:ПАУЗА|МИКРОПАУЗА):(\d+)\]")
@@ -27,10 +28,25 @@ def split_segments(text: str) -> list[tuple[str, int]]:
     return segments
 
 
-def synthesize_segment(client: ElevenLabs, text: str, voice_id: str, model_id: str, output_format: str) -> bytes:
+def synthesize_segment(
+    client: ElevenLabs,
+    text: str,
+    voice_id: str,
+    model_id: str,
+    output_format: str,
+    voice_settings: VoiceSettings,
+    language_code: str | None,
+) -> bytes:
     # convert() returns Iterator[bytes] (a streaming response) - not a single bytes object -
     # so the audio has to be assembled from chunks rather than written directly.
-    chunks = client.text_to_speech.convert(text=text, voice_id=voice_id, model_id=model_id, output_format=output_format)
+    chunks = client.text_to_speech.convert(
+        text=text,
+        voice_id=voice_id,
+        model_id=model_id,
+        output_format=output_format,
+        voice_settings=voice_settings,
+        language_code=language_code,
+    )
     return b"".join(chunk for chunk in chunks if isinstance(chunk, bytes))
 
 
@@ -103,6 +119,9 @@ def main(cfg: DictConfig) -> None:
     # pass re-encodes to mp3 itself, so only the bitrate part of it is needed here.
     bitrate = cfg.output_format.split("_")[-1] + "k"
 
+    voice_settings = VoiceSettings(**dict(cfg.voice_settings))
+    language_code = cfg.get("language_code")
+
     client = ElevenLabs()
     succeeded, skipped, failed = 0, 0, 0
     for txt_path in txt_files:
@@ -125,7 +144,10 @@ def main(cfg: DictConfig) -> None:
                 pieces = []
                 for i, (spoken, pause_seconds) in enumerate(segments):
                     if spoken:
-                        audio = synthesize_segment(client, spoken, voice_id, cfg.model_id, cfg.output_format)
+                        audio = synthesize_segment(
+                            client, spoken, voice_id, cfg.model_id, cfg.output_format,
+                            voice_settings, language_code,
+                        )
                         pieces.append(mp3_bytes_to_wav(audio, work_dir, f"seg_{i}"))
                     if pause_seconds > 0:
                         pieces.append(silence_wav(pause_seconds, work_dir, f"pause_{i}"))

@@ -15,11 +15,23 @@ DEFAULT_PAUSE_FRACTION = 0.3
 DEFAULT_MICRO_PAUSE_FRACTION = 0.02
 
 
-def compute_targets(stats_path: Path, target_minutes: float) -> tuple[int, int, int, int, int]:
+# Upper bound on how much of a class can be pause/micro-pause time once scaled up, so aggressive
+# pause_scale values can't starve the class of actual narration.
+MAX_PAUSE_FRACTION_SUM = 0.7
+
+
+def compute_targets(
+    stats_path: Path,
+    target_minutes: float,
+    pause_scale: float = 1.0,
+    micro_pause_scale: float = 1.0,
+) -> tuple[int, int, int, int, int]:
     """Derives word-count and pause targets for a class of the requested length, calibrated
     against the real corpus's observed speaking rate and pause behavior when available.
-    Returns (target_words, target_pause_count, target_pause_seconds, target_micro_pause_count,
-    target_micro_pause_seconds)."""
+    pause_scale / micro_pause_scale multiply the corpus's natural pause and micro-pause share to
+    make the class roomier (more/longer breaks, correspondingly fewer narrated words) while keeping
+    the same total duration. Returns (target_words, target_pause_count, target_pause_seconds,
+    target_micro_pause_count, target_micro_pause_seconds)."""
     target_total_seconds = target_minutes * 60
 
     if stats_path.is_file():
@@ -44,6 +56,16 @@ def compute_targets(stats_path: Path, target_minutes: float) -> tuple[int, int, 
         micro_pause_fraction = DEFAULT_MICRO_PAUSE_FRACTION
         avg_seconds_per_pause = None
         avg_seconds_per_micro_pause = None
+
+    # Roomier class: give pauses a bigger share of the fixed total (so narration shrinks to match),
+    # clamped so the two together never crowd out most of the actual speech.
+    pause_fraction *= pause_scale
+    micro_pause_fraction *= micro_pause_scale
+    fraction_sum = pause_fraction + micro_pause_fraction
+    if fraction_sum > MAX_PAUSE_FRACTION_SUM:
+        scale_down = MAX_PAUSE_FRACTION_SUM / fraction_sum
+        pause_fraction *= scale_down
+        micro_pause_fraction *= scale_down
 
     target_pause_seconds = target_total_seconds * pause_fraction
     target_micro_pause_seconds = target_total_seconds * micro_pause_fraction
@@ -76,11 +98,14 @@ def compute_targets(stats_path: Path, target_minutes: float) -> tuple[int, int, 
 SYSTEM_INSTRUCTIONS = """You are ghostwriting a new contemporary dance / movement improvisation class script in \
 the voice and style of a specific teacher, based on transcripts of their real classes.
 
-Write ONLY the teacher's own continuous instructional monologue - as if narrating a class in real time. Do not \
-include:
+Write ONLY the teacher's own continuous instructional monologue - as if narrating a class in real time, guiding a \
+general audience. Do not include:
 - Greetings or check-ins addressed to specific students
 - Questions to, or answers from, students
 - Any references to specific student names
+- Personal corrections, adjustments, or feedback aimed at one individual student (e.g. "нет, у тебя колено \
+уходит внутрь", "чуть выше руку", "Маша, расслабь плечи", hands-on fixes or reacting to what one person is \
+doing). Keep every instruction addressed to everyone at once, never to a single person's specific mistake.
 - Technical/logistical chatter (audio issues, "can you hear me", scheduling, etc.)
 
 Insert the literal marker [ПАУЗА:N] (N = an integer number of seconds, e.g. [ПАУЗА:15]) at points that represent \
@@ -97,15 +122,21 @@ sentences or ideas while still narrating the class overall.
 The output should read as one continuous, flowing class script a student could follow directly - covering a \
 warm-up, a technical or thematic focus, and a natural close - in the teacher's own vocabulary and phrasing style, \
 including their characteristic code-switching between Russian and English movement terminology where the \
-examples show it."""
+examples show it.
+
+You may be asked to write the class in consecutive sections across several turns. When continuing a class you have \
+already started, pick up seamlessly from where you left off: do not greet, do not recap or repeat earlier content, \
+do not restart the warm-up, and only bring the class to a close when explicitly asked for the final section. Each \
+turn should read as the direct continuation of the previous one, as if it were all one uninterrupted class."""
 
 
 def build_system_prompt(examples: list[str], digest_path: Path) -> list[dict]:
-    """Instructions + digest are identical across every class in a run, so they get their own
-    cache_control breakpoint - that block actually hits the cache from the 2nd class onward.
-    The example sample is re-randomized per class (see generate_one), so it's kept in a separate,
-    uncached block: tagging ever-changing content with cache_control would never hit and would
-    only pay the pricier cache-write cost on every single call instead of plain input pricing."""
+    """Two cache breakpoints. Instructions + digest are identical across every class in a run, so
+    that block hits the cache from the 2nd class onward. The example sample is re-randomized per
+    class (see generate_one) so it never hits across classes - but since each class is now written
+    as several section calls that all reuse the same examples, caching that block still pays off:
+    it's written once on the first section and reused by the remaining sections of the same class
+    (well within the ephemeral cache TTL, as the sections run back to back)."""
     static_parts = [SYSTEM_INSTRUCTIONS]
     if digest_path.is_file():
         static_parts.append(
@@ -117,31 +148,65 @@ def build_system_prompt(examples: list[str], digest_path: Path) -> list[dict]:
     example_parts = ["Here are transcripts of several real classes by this teacher, for style and content reference:"]
     for i, example in enumerate(examples, 1):
         example_parts.append(f"\n--- Example class {i} ---\n{example}")
-    blocks.append({"type": "text", "text": "\n".join(example_parts)})
+    blocks.append({"type": "text", "text": "\n".join(example_parts), "cache_control": {"type": "ephemeral"}})
     return blocks
 
 
-def build_user_message(
+def split_by_weight(total: int, weights: list[float]) -> list[int]:
+    """Splits an integer total across sections proportionally to weights (normalized here, so they
+    needn't sum to 1). Rounds each share, then puts any rounding remainder on the largest section
+    so the parts still sum exactly to total."""
+    weight_sum = sum(weights)
+    shares = [round(total * w / weight_sum) for w in weights]
+    drift = total - sum(shares)
+    if drift and shares:
+        shares[shares.index(max(shares))] += drift
+    return shares
+
+
+def build_section_user_message(
+    section_index: int,
+    num_sections: int,
+    section_name: str,
     topic: str | None,
-    target_words: int,
-    target_pause_count: int,
-    target_pause_seconds: int,
-    target_micro_pause_count: int,
-    target_micro_pause_seconds: int,
-    target_minutes: float,
+    sec_words: int,
+    sec_pause_count: int,
+    sec_pause_seconds: int,
+    sec_micro_pause_count: int,
+    sec_micro_pause_seconds: int,
 ) -> str:
-    ask = "Now write a new, original class script in this teacher's style"
-    if topic:
-        ask += f", focused on {topic}"
-    ask += ". Do not copy sentences from the examples - write new instructional content that matches the teacher's voice, structure, and vocabulary."
+    is_first = section_index == 0
+    is_last = section_index == num_sections - 1
+
+    if is_first:
+        ask = "Now begin a new, original class script in this teacher's style"
+        if topic:
+            ask += f", focused on {topic}"
+        ask += (
+            f". This class will be written in {num_sections} consecutive sections; this is section "
+            f"1 of {num_sections} - the {section_name}. Do not copy sentences from the examples - write new "
+            "instructional content that matches the teacher's voice, structure, and vocabulary. Do NOT wrap up "
+            "or conclude the class - this is only the beginning; end mid-flow so it can continue."
+        )
+    elif is_last:
+        ask = (
+            f"Continue the SAME class directly from where you stopped, and bring it to its natural close. "
+            f"This is the final section ({section_index + 1} of {num_sections}) - the {section_name}. Do not greet, "
+            "recap, or repeat earlier content. Keep the same voice and flow, then wind the class down and end it "
+            "as this teacher naturally would."
+        )
+    else:
+        ask = (
+            f"Continue the SAME class directly from where you stopped. This is section {section_index + 1} of "
+            f"{num_sections} - the {section_name}. Do not greet, recap, or repeat earlier content, and do not "
+            "conclude the class yet. Keep the same voice and flow."
+        )
+
     ask += (
-        f" Aim for approximately {target_words} words of spoken narration, with roughly {target_pause_count} "
-        f"[ПАУЗА:N] pause markers totaling around {target_pause_seconds // 60} minutes of pause time, so the "
-        f"full class (narration plus pauses) comes out to about {target_minutes:g} minutes overall."
-    )
-    ask += (
-        f" Also include roughly {target_micro_pause_count} brief [МИКРОПАУЗА:N] settle/breath pauses, "
-        f"totaling around {target_micro_pause_seconds} seconds."
+        f" For this section, aim for approximately {sec_words} words of spoken narration, with roughly "
+        f"{sec_pause_count} [ПАУЗА:N] pause markers totaling around {sec_pause_seconds} seconds, and about "
+        f"{sec_micro_pause_count} brief [МИКРОПАУЗА:N] settle/breath pauses totaling around "
+        f"{sec_micro_pause_seconds} seconds."
     )
     return ask
 
@@ -153,27 +218,53 @@ def generate_class(
     max_tokens: int,
     topic: str | None,
     digest_path: Path,
+    sections: list,
     target_words: int,
     target_pause_count: int,
     target_pause_seconds: int,
     target_micro_pause_count: int,
     target_micro_pause_seconds: int,
-    target_minutes: float,
 ) -> str:
-    with client.messages.stream(
-        model=model,
-        max_tokens=max_tokens,
-        system=build_system_prompt(examples, digest_path),
-        messages=[{
+    """Builds the class as a multi-turn continuation: each section is its own generation, but the
+    running message history (prior sections as assistant turns) keeps the model writing one
+    coherent class rather than restarting each time. Per-section targets are the totals split by
+    each section's weight."""
+    names = [str(s["name"]) for s in sections]
+    weights = [float(s["weight"]) for s in sections]
+    words_split = split_by_weight(target_words, weights)
+    pause_count_split = split_by_weight(target_pause_count, weights)
+    pause_seconds_split = split_by_weight(target_pause_seconds, weights)
+    micro_count_split = split_by_weight(target_micro_pause_count, weights)
+    micro_seconds_split = split_by_weight(target_micro_pause_seconds, weights)
+
+    system = build_system_prompt(examples, digest_path)
+    messages: list[dict] = []
+    parts: list[str] = []
+    num_sections = len(sections)
+    for k in range(num_sections):
+        messages.append({
             "role": "user",
-            "content": build_user_message(
-                topic, target_words, target_pause_count, target_pause_seconds,
-                target_micro_pause_count, target_micro_pause_seconds, target_minutes,
+            "content": build_section_user_message(
+                k, num_sections, names[k], topic,
+                words_split[k], pause_count_split[k], pause_seconds_split[k],
+                micro_count_split[k], micro_seconds_split[k],
             ),
-        }],
-    ) as stream:
-        message = stream.get_final_message()
-    return next(block.text for block in message.content if block.type == "text")
+        })
+        with client.messages.stream(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
+        ) as stream:
+            message = stream.get_final_message()
+        section_text = next(block.text for block in message.content if block.type == "text").strip()
+        parts.append(section_text)
+        # Feed the section back as the assistant turn so the next section continues from it.
+        messages.append({"role": "assistant", "content": section_text})
+        label = names[k].split(":")[0].strip()
+        print(f"    section {k + 1}/{num_sections} ({label}): ~{len(section_text.split())} words")
+
+    return "\n\n".join(parts)
 
 
 def generate_one(
@@ -185,12 +276,12 @@ def generate_one(
     max_tokens: int,
     topic: str | None,
     digest_path: Path,
+    sections: list,
     target_words: int,
     target_pause_count: int,
     target_pause_seconds: int,
     target_micro_pause_count: int,
     target_micro_pause_seconds: int,
-    target_minutes: float,
     dst_path: Path,
 ) -> None:
     # A different seed per class means a different sample of examples - without this, every
@@ -201,12 +292,12 @@ def generate_one(
     examples = [f.read_text(encoding="utf-8") for f in chosen]
 
     text = generate_class(
-        client, examples, model, max_tokens, topic, digest_path,
+        client, examples, model, max_tokens, topic, digest_path, sections,
         target_words, target_pause_count, target_pause_seconds,
-        target_micro_pause_count, target_micro_pause_seconds, target_minutes,
+        target_micro_pause_count, target_micro_pause_seconds,
     )
     dst_path.write_text(text, encoding="utf-8")
-    print(f"{dst_path.name}: done -> {dst_path}")
+    print(f"{dst_path.name}: done ({len(text.split())} words) -> {dst_path}")
 
 
 @hydra.main(config_path="../conf", config_name="generate_class", version_base=None)
@@ -228,7 +319,10 @@ def main(cfg: DictConfig) -> None:
     # Targets don't vary across classes in the same run, so compute them once rather than
     # re-deriving (and re-reading corpus_stats.json) on every iteration.
     target_words, target_pause_count, target_pause_seconds, target_micro_pause_count, target_micro_pause_seconds = (
-        compute_targets(Path(cfg.stats_path), cfg.target_minutes)
+        compute_targets(
+            Path(cfg.stats_path), cfg.target_minutes,
+            cfg.get("pause_scale", 1.0), cfg.get("micro_pause_scale", 1.0),
+        )
     )
 
     client = anthropic.Anthropic()
@@ -247,8 +341,8 @@ def main(cfg: DictConfig) -> None:
         try:
             generate_one(
                 client, files, cfg.seed + i, cfg.num_examples, cfg.model, cfg.max_tokens, cfg.topic,
-                digest_path, target_words, target_pause_count, target_pause_seconds,
-                target_micro_pause_count, target_micro_pause_seconds, cfg.target_minutes,
+                digest_path, cfg.sections, target_words, target_pause_count, target_pause_seconds,
+                target_micro_pause_count, target_micro_pause_seconds,
                 dst_path,
             )
         except Exception as e:
