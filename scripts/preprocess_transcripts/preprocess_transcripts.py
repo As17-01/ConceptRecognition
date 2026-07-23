@@ -38,6 +38,83 @@ SUBTITLE_CREDITS = re.compile(
     r"[Рр]едактор субтитров\s+\S+\s+[Кк]орректор\s+\S+\.?|[Сс]убтитры\s+\S+\s+DimaTorzok\.?"
 )
 
+# Whisper also hallucinates transcribe.py's own initial_prompt text back as fake "spoken" content
+# (found near-verbatim in dozens of files, both glued to a SUBTITLE_CREDITS artifact and entirely
+# standalone) - a known failure mode where a low-confidence moment causes the model to echo its
+# own prompt instead of admitting uncertainty. The echo is often fragmentary/reordered (e.g.
+# "Практика контемпорари и двигательной импульс, амплитуда, ..." skips "импровизации. Термины:
+# вытяжение, ось, текстура," entirely), so this matches on DENSITY of known prompt vocabulary
+# packed together with only light connectors between terms (comma/period/colon/"и"), rather than
+# trying to match the prompt text exactly. Keep this list in sync with transcribe.yaml's
+# initial_prompt - not shared code, no common module in this codebase (see other scripts).
+#
+# A plain "3+ terms in a row" rule is too aggressive on its own - tested against plausible real
+# instruction ("Проверяем: ось, бедра, копчик.", a genuine anatomical checklist) and it wrongly
+# stripped realistic sentences, since most of these terms (flow, vibe, range, бедра, ось,
+# амплитуда, многозадачность, копчик, текстура) are ordinary enough to legitimately appear listed
+# together. So a candidate span is only actually removed if it ALSO contains at least one term
+# from DISTINCTIVE_ANCHOR - kept deliberately narrow, to only "кагами" (unusual enough that it's
+# essentially never going to appear as coincidental real content) and the two distinctive opening-
+# sentence fragments. "thread of the arms/legs" and "full body experience" are deliberately NOT
+# anchors despite being English phrases - they're established, genuinely recurring real content in
+# this corpus (that's why they were in initial_prompt from the very start), so gating on them risks
+# stripping real speech the same way the ordinary single words did. This narrow anchor accepts more
+# false negatives (a hallucinated echo that happens to skip "кагами" and both opening fragments
+# won't be caught) in exchange for far fewer false positives - reasonable given VAD tuning is now
+# the primary defense (see transcribe.yaml's vad_threshold) and this is just a cleanup safety net
+# for whatever slips through, not the main defense. Unanchored comma-list echoes of the prompt
+# vocabulary block are handled separately by strip_prompt_vocab_list_echo below.
+PROMPT_TERM = (
+    r"вытяжени[ея]|ось|текстура|импульс|амплитуда|многозадачность|бедра|копчик|кагами|"
+    r"практика\s+контемпорари|двигательной(?:\s+импровизации)?|термины|"
+    r"thread of the arms|thread of the legs|full body experience|range|flow|vibe|groove"
+)
+PROMPT_ECHO_CANDIDATE = re.compile(
+    rf"(?:\b(?:{PROMPT_TERM})\b[,.:]?\s*(?:и\s+)?){{3,}}",
+    re.IGNORECASE,
+)
+DISTINCTIVE_ANCHOR = re.compile(
+    r"кагами|практика\s+контемпорари|двигательной\s+импровизации",
+    re.IGNORECASE,
+)
+
+# Second pass for unanchored echoes: Whisper often replays the comma-separated vocabulary tail of
+# transcribe.yaml's initial_prompt verbatim ("Термины, ось, текстура, ... flow, vibe, groove.")
+# without ever hitting DISTINCTIVE_ANCHOR. Real instruction may list a few anatomical cues but
+# won't open with "Термины," / "Вытяжение," and then enumerate 4+ core prompt terms in comma-list
+# form; gate on that density instead of a single rare anchor word.
+PROMPT_LIST_HEAD = r"(?:[Тт]ермины|[Вв]ытяжени[ея])"
+PROMPT_LIST_ITEM = (
+    r"вытяжени[ея]|ось|текстура|импульс|амплитуда|многозадачность|бедра|копчик|кагами|"
+    r"практика\s+контемпорари|двигательной(?:\s+импровизации)?|"
+    r"thread of the arms|thread of the legs|full body experience|range|flow|vibe|groove"
+)
+PROMPT_VOCAB_LIST = re.compile(
+    rf"\b{PROMPT_LIST_HEAD}[,:]?\s*(?:\b(?:{PROMPT_LIST_ITEM})\b\s*,\s*)+(?:\b(?:{PROMPT_LIST_ITEM})\b)\s*\.?",
+    re.IGNORECASE,
+)
+PROMPT_LIST_CORE = re.compile(
+    r"\b(?:ось|текстура|импульс|амплитуда|многозадачность|бедра)\b",
+    re.IGNORECASE,
+)
+PROMPT_LIST_ENGLISH_TAIL = re.compile(r"\b(?:flow|vibe|groove)\b", re.IGNORECASE)
+
+
+def is_clear_prompt_vocab_list(span: str) -> bool:
+    core_hits = PROMPT_LIST_CORE.findall(span)
+    return len(core_hits) >= 4 or (len(core_hits) >= 3 and PROMPT_LIST_ENGLISH_TAIL.search(span))
+
+
+def strip_prompt_vocab_list_echo(text: str) -> str:
+    return PROMPT_VOCAB_LIST.sub(lambda m: " " if is_clear_prompt_vocab_list(m.group()) else m.group(), text)
+
+
+def strip_prompt_echo(text: str) -> str:
+    text = PROMPT_ECHO_CANDIDATE.sub(
+        lambda m: " " if DISTINCTIVE_ANCHOR.search(m.group()) else m.group(), text
+    )
+    return strip_prompt_vocab_list_echo(text)
+
 # format defined in transcribe.py - keep in sync. Matches either marker type (structural
 # "[ПАУЗА:N]" or short "[МИКРОПАУЗА:N]") - transcribe.py emits these natively now, this file just
 # needs to let them survive cleaning untouched, not backfill them.
@@ -46,6 +123,7 @@ PAUSE_MARKER_RE = re.compile(r"\[(?:ПАУЗА|МИКРОПАУЗА):(\d+)\]")
 
 def clean_text(text: str) -> str:
     text = SUBTITLE_CREDITS.sub(" ", text)
+    text = strip_prompt_echo(text)
     text = NON_TARGET_CHARS.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
