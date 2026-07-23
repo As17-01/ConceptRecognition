@@ -6,13 +6,18 @@ output_format: mp3_44100_128
 scratch_dir: data/tts_scratch                 # temp WAV pieces for pause-aware concat (gitignored along with the rest of data/)
 language_code: ru                             # force Russian pronunciation/normalization (multilingual_v2 can drift on short segments)
 
+# One TTS call per [ПАУЗА:N] block (not per [МИКРОПАУЗА:N]) to avoid hundreds of independent
+# generations that drift in voice. previous_text/next_text link adjacent blocks for continuity.
+context_chars: 300                            # chars of neighboring block text passed as context
+seed: 42                                      # fixed seed across blocks for more consistent voice
+
 # Voice generation settings (see also preview_voice.py, which shares these). ElevenLabs speed is
 # 0.7 (slowest) - 1.2 (fastest), default 1.0; the default came out too fast-paced for a calm
 # instructional class, so this is nudged slower. stability/similarity_boost trade expressiveness
 # for consistency - higher similarity_boost keeps the clone closer to the reference voice.
 voice_settings:
   speed: 0.85           # slower, calmer pacing than the 1.0 default
-  stability: 0.5
-  similarity_boost: 0.85
+  stability: 0.25       # lower = more intonation/variation (0.5 was too flat)
+  similarity_boost: 0.70  # slightly looser clone match, more natural flow
   style: 0.0
   use_speaker_boost: true
