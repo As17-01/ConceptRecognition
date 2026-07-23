@@ -96,7 +96,11 @@ def classify_pause_events(
     for i in range(1, len(speech_timestamps)):
         gap = speech_timestamps[i]["start"] - speech_timestamps[i - 1]["end"]
         if gap >= min_micro_pause_samples:
-            pause_seconds = round(gap / SAMPLE_RATE)
+            # Floor, not round: rounding a gap of e.g. 7.6s up to a displayed "8" would read as
+            # a structural pause despite correctly classifying as micro (7.6 < 8.0) - flooring
+            # guarantees the displayed number can never cross the classification boundary either
+            # way (floor(x) < min_pause_seconds whenever x < min_pause_seconds, and vice versa).
+            pause_seconds = int(gap / SAMPLE_RATE)
             marker = f"[ПАУЗА:{pause_seconds}]" if gap >= min_pause_samples else f"[МИКРОПАУЗА:{pause_seconds}]"
             events.append((speech_timestamps[i - 1]["end"], marker))
     return events
