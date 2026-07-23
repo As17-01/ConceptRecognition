@@ -7,8 +7,8 @@ stats_dst: data/corpus_stats.json   # exact word/pause stats consumed by generat
 # extraction task - a cheap/fast model is the right cost/quality tradeoff there. The reduce model
 # runs exactly once, synthesizing across all per-file digests, where synthesis quality matters
 # most and the input (concatenated digests, not full transcripts) is small either way.
-map_model: claude-haiku-4-5-20251001
-reduce_model: claude-opus-4-8
+map_model: claude-haiku-4-5
+reduce_model: claude-opus-4-20250514
 map_max_tokens: 1024     # ~150-250 word digest per file; small, no streaming needed
 reduce_max_tokens: 4096  # a few hundred to ~1000 word consolidated digest; streamed regardless
 

@@ -1,6 +1,6 @@
 src: data/preprocessed        # cleaned transcripts (artifact-free, no name placeholders) to draw few-shot examples from
 dst: data/generated            # folder where generated classes (class_001.txt, class_002.txt, ...) are saved
-model: claude-opus-4-8        # see claude-api skill: always use this unless told otherwise
+model: claude-opus-4-20250514 # router.cheap catalog; was claude-opus-4-8 on direct Anthropic API
 max_tokens: 24000              # generous headroom; streamed so no HTTP-timeout risk - a ~60min narration at ~140wpm is roughly 8000-9000 Russian words, which can run 12000-16000+ output tokens
 num_classes: 5                 # how many classes to generate in this run
 num_examples: 3                # transcripts sampled as few-shot style/content reference, per class
