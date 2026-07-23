@@ -64,25 +64,23 @@ condition_on_previous_text: false
 # Biases Whisper's vocabulary toward the speaker's actual jargon (movement/dance terms,
 # code-switched English) to reduce mid-word hallucinations like "бедраader" or "chamber today".
 # Only strongly affects the first ~224 tokens of context; extend/adjust as you spot recurring
-# mis-transcriptions in new recordings. The English terms after "vibe" were mined from the actual
-# 129-file corpus (counted frequency of pure-English tokens across data/transcriptions, excluding
-# generic filler words and the "DimaTorzok" subtitle-hallucination artifact) - these are the most
-# common recurring code-switched terms not already covered above.
+# mis-transcriptions in new recordings.
+#
+# REVERTED (2026-07-23): this was previously expanded with 16 more corpus-mined terms, and a
+# "hotwords" field was added duplicating the same list via faster-whisper's separate biasing
+# mechanism. That caused the model to literally echo the prompt text back as fake "transcribed"
+# content - found near-verbatim in 81 of 129 files (513 occurrences), e.g. "...кагами, thread of
+# the arms, thread of the legs, flow, vibe, movement, body, experience, experience, experience,
+# experience" appearing where no one actually spoke that. faster-whisper's batched pipeline
+# re-seeds this exact prompt fresh at the start of every single clip in a file, so an unusually
+# long/list-like/duplicated-via-hotwords prompt gets many chances per file to be echoed instead of
+# just biasing vocabulary. Back to the short, natural-sentence-style version that didn't show this
+# failure mode; hotwords removed entirely rather than shrunk, since it isn't validated as safe at
+# any size yet. Test on a handful of files for this exact artifact before trusting a full rerun.
 initial_prompt: >-
   Практика контемпорари и двигательной импровизации. Термины: вытяжение, ось, текстура, импульс,
   амплитуда, многозадачность, бедра, копчик, кагами, thread of the arms, thread of the legs,
-  full body experience, range, flow, vibe, movement, body, curves, sensation, floating, space,
-  attention, spine, breath, chain, suspension, groove, energy, tension, quality, explore.
-# A faster-whisper-specific mechanism (not available in the original openai-whisper library):
-# biases decoding toward these terms without consuming any of initial_prompt's limited context
-# budget. Reuses the same mined vocabulary as a second, complementary lever - unlike
-# initial_prompt (a natural-language hint applied once per clip), hotwords is a flat term list
-# with its own dedicated biasing mechanism.
-hotwords: >-
-  контемпорари импровизация вытяжение ось текстура импульс амплитуда многозадачность бедра копчик
-  кагами thread of the arms thread of the legs full body experience range flow vibe movement body
-  curves sensation floating space attention spine breath chain suspension groove energy tension
-  quality explore
+  full body experience, range, flow, vibe, groove.
 # Newer, dedicated anti-hallucination lever (not available in the original openai-whisper
 # library): if the model detects a likely-silent stretch longer than this many seconds partway
 # through a clip's decoding, it treats whatever text follows with more skepticism. Complements

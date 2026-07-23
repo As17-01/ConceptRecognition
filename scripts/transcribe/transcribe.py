@@ -132,7 +132,6 @@ def transcribe_mp3(
     min_pause_seconds: float,
     min_micro_pause_seconds: float,
     batch_size: int,
-    hotwords: str,
     hallucination_silence_threshold: float,
     without_timestamps: bool,
 ) -> tuple[str, int, int]:
@@ -164,7 +163,6 @@ def transcribe_mp3(
         wav,
         language=language,
         initial_prompt=initial_prompt,
-        hotwords=hotwords,
         condition_on_previous_text=condition_on_previous_text,
         beam_size=5,
         best_of=5,
@@ -217,7 +215,6 @@ def transcribe_mp3s(
     min_pause_seconds: float,
     min_micro_pause_seconds: float,
     batch_size: int,
-    hotwords: str,
     hallucination_silence_threshold: float,
     without_timestamps: bool,
 ) -> None:
@@ -265,7 +262,6 @@ def transcribe_mp3s(
                 min_pause_seconds,
                 min_micro_pause_seconds,
                 batch_size,
-                hotwords,
                 hallucination_silence_threshold,
                 without_timestamps,
             )
@@ -314,7 +310,6 @@ def main(cfg: DictConfig) -> None:
         cfg.min_pause_seconds,
         cfg.min_micro_pause_seconds,
         cfg.batch_size,
-        cfg.hotwords,
         cfg.hallucination_silence_threshold,
         cfg.without_timestamps,
     )
