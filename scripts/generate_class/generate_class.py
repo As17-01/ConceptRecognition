@@ -119,6 +119,11 @@ tied to any physical movement or music break. This is distinct from [ПАУЗА:
 no narration, while [МИКРОПАУЗА:N] marks the kind of short breath a real speaker naturally takes between \
 sentences or ideas while still narrating the class overall.
 
+Pace the narration generously: develop each idea fully before introducing the next layer. Return to a sensation \
+or movement principle from several different angles — cue it, invite students to feel it, revisit it — before \
+moving on. Avoid rapid-fire stacking of new concepts; one instruction explored deeply is worth more than three \
+stated in quick succession. A real teacher repeats, circles back, and waits for the body to catch up.
+
 The output should read as one continuous, flowing class script a student could follow directly - covering a \
 warm-up, a technical or thematic focus, and a natural close - in the teacher's own vocabulary and phrasing style, \
 including their characteristic code-switching between Russian and English movement terminology where the \
@@ -172,8 +177,6 @@ def build_section_user_message(
     sec_words: int,
     sec_pause_count: int,
     sec_pause_seconds: int,
-    sec_micro_pause_count: int,
-    sec_micro_pause_seconds: int,
 ) -> str:
     is_first = section_index == 0
     is_last = section_index == num_sections - 1
@@ -204,9 +207,9 @@ def build_section_user_message(
 
     ask += (
         f" For this section, aim for approximately {sec_words} words of spoken narration, with roughly "
-        f"{sec_pause_count} [ПАУЗА:N] pause markers totaling around {sec_pause_seconds} seconds, and about "
-        f"{sec_micro_pause_count} brief [МИКРОПАУЗА:N] settle/breath pauses totaling around "
-        f"{sec_micro_pause_seconds} seconds."
+        f"{sec_pause_count} [ПАУЗА:N] pause markers totaling around {sec_pause_seconds} seconds. "
+        "Use [МИКРОПАУЗА:N] naturally where you would take a brief breath between thoughts — "
+        "do not aim for a specific count."
     )
     return ask
 
@@ -234,8 +237,6 @@ def generate_class(
     words_split = split_by_weight(target_words, weights)
     pause_count_split = split_by_weight(target_pause_count, weights)
     pause_seconds_split = split_by_weight(target_pause_seconds, weights)
-    micro_count_split = split_by_weight(target_micro_pause_count, weights)
-    micro_seconds_split = split_by_weight(target_micro_pause_seconds, weights)
 
     system = build_system_prompt(examples, digest_path)
     messages: list[dict] = []
@@ -247,7 +248,6 @@ def generate_class(
             "content": build_section_user_message(
                 k, num_sections, names[k], topic,
                 words_split[k], pause_count_split[k], pause_seconds_split[k],
-                micro_count_split[k], micro_seconds_split[k],
             ),
         })
         with client.messages.stream(

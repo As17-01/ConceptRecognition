@@ -7,9 +7,6 @@ from pathlib import Path
 from omegaconf import DictConfig
 from elevenlabs.client import ElevenLabs
 
-# ElevenLabs Instant Voice Cloning accepts at most this many reference files per voice.
-MAX_IVC_FILES = 25
-
 
 def probe_duration(path: Path) -> float:
     result = subprocess.run(
@@ -50,24 +47,23 @@ def extract_clips(
     clips_per_file: int,
     clip_seconds: int,
     skip_start_seconds: float,
-    early_window_seconds: float,
+    end_skip_seconds: float,
 ) -> tuple[list[Path], list[float]]:
-    """Trims clips_per_file short reference clips from the opening of the recording, before
-    background music usually starts. skip_start_seconds skips mic-check/greeting chatter at the
-    very top; all clips land within early_window_seconds after that. start_index keeps clip
-    filenames unique across multiple source recordings written into the same scratch dir."""
+    """Extracts clips_per_file reference clips spread evenly across the usable middle of the
+    recording: after skip_start_seconds (greeting/arrival chatter) and before end_skip_seconds
+    from the end (student Q&A / conversation). PVC's remove_background_noise handles music
+    within that window, so clips across the full class body are fine."""
     duration = probe_duration(src_path)
     window_start = skip_start_seconds
-    window_end = min(duration, window_start + early_window_seconds)
+    window_end = duration - end_skip_seconds
     if window_end - window_start < clip_seconds:
         print(
-            f"  WARNING: {src_path.name} early window too short "
+            f"  WARNING: {src_path.name} usable window too short "
             f"({window_end - window_start:.0f}s) for {clip_seconds}s clips - skipping",
             file=sys.stderr,
         )
         return [], []
 
-    # Spread clip start times across the early window (not the full hour-long file).
     latest_start = window_end - clip_seconds
     if clips_per_file == 1:
         offsets = [window_start]
@@ -101,8 +97,7 @@ def resolve_selected_clips(scratch_dir: Path, selected_clips) -> list[Path]:
     if not selected_clips:
         return []
 
-    clips = []
-    missing = []
+    clips, missing = [], []
     for name in selected_clips:
         path = scratch_dir / name
         if path.is_file():
@@ -112,30 +107,49 @@ def resolve_selected_clips(scratch_dir: Path, selected_clips) -> list[Path]:
     if missing:
         print(f"Selected clip(s) not found under {scratch_dir}: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
-    if len(clips) > MAX_IVC_FILES:
-        print(
-            f"Selected {len(clips)} clips, but ElevenLabs IVC allows at most {MAX_IVC_FILES}.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
     return clips
 
 
-def upload_cloned_voice(client: ElevenLabs, clips: list[Path], cfg: DictConfig) -> None:
-    # Pass (filename, bytes, content_type) tuples - bare path strings are treated as file *content*,
-    # not paths, which makes ElevenLabs reject the upload as corrupted audio.
-    files = [(clip.name, clip.read_bytes(), "audio/mpeg") for clip in clips]
-    voice = client.voices.ivc.create(
+def create_pvc_voice(client: ElevenLabs, clips: list[Path], cfg: DictConfig) -> None:
+    """Three-step PVC flow: create voice record → upload samples → kick off training.
+    Training is asynchronous (30 min to a few hours); the voice_id is saved immediately
+    so synthesize_speech.py is configured and ready once ElevenLabs finishes."""
+
+    # Step 1: Create the voice record — metadata only, no audio yet.
+    voice = client.voices.pvc.create(
         name=cfg.voice_name,
+        language=cfg.language,
         description=cfg.voice_description,
         labels=dict(cfg.voice_labels),
+    )
+    voice_id = voice.voice_id
+    print(f"Created PVC voice '{cfg.voice_name}' -> voice_id: {voice_id}")
+
+    # Step 2: Upload reference audio. remove_background_noise strips music and ambient noise
+    # before training — the key reason PVC handles this corpus better than IVC.
+    files = [(clip.name, clip.read_bytes(), "audio/mpeg") for clip in clips]
+    client.voices.pvc.samples.create(
+        voice_id=voice_id,
         files=files,
+        remove_background_noise=cfg.remove_background_noise,
+    )
+    total_min = len(clips) * cfg.clip_seconds // 60
+    print(
+        f"Uploaded {len(clips)} clips (~{total_min} min of reference audio, "
+        f"background noise removal: {cfg.remove_background_noise})"
     )
 
+    # Step 3: Kick off training. Returns immediately; training continues on ElevenLabs' side.
+    client.voices.pvc.train(voice_id=voice_id)
+    print("Training submitted. PVC typically takes 30 minutes to a few hours.")
+    print("Check progress at: https://elevenlabs.io/app/voice-lab")
+
+    # Save voice_id now so synthesize_speech.py is ready when training finishes.
     dst_path = Path(cfg.dst_voice_id_file)
     dst_path.parent.mkdir(parents=True, exist_ok=True)
-    dst_path.write_text(voice.voice_id, encoding="utf-8")
-    print(f"Cloned voice '{cfg.voice_name}' -> voice_id {voice.voice_id} (saved to {dst_path})")
+    dst_path.write_text(voice_id, encoding="utf-8")
+    print(f"Voice ID saved to {dst_path} — run synthesize_speech.py after training completes.")
+
 
 @hydra.main(config_path="../conf", config_name="clone_voice", version_base=None)
 def main(cfg: DictConfig) -> None:
@@ -147,6 +161,11 @@ def main(cfg: DictConfig) -> None:
         for clip in selected:
             print(f"  - {clip.name}")
         clips = selected
+    elif scratch_dir.exists() and any(scratch_dir.glob("*.mp3")):
+        clips = sorted(scratch_dir.glob("*.mp3"))
+        print(f"Found {len(clips)} existing clip(s) in {scratch_dir} (skipping extraction):")
+        for clip in clips:
+            print(f"  - {clip.name}")
     else:
         src_dir = Path(cfg.src_dir)
         if not src_dir.is_dir():
@@ -154,16 +173,6 @@ def main(cfg: DictConfig) -> None:
             sys.exit(1)
 
         sources = select_source_files(src_dir, cfg.sample_files, cfg.num_source_files)
-
-        total_clips = len(sources) * cfg.clips_per_file
-        if total_clips > MAX_IVC_FILES:
-            print(
-                f"Requested {total_clips} clips ({len(sources)} files x {cfg.clips_per_file}), "
-                f"but ElevenLabs IVC allows at most {MAX_IVC_FILES}. Lower num_source_files or clips_per_file.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
         clips = []
         for src_path in sources:
             new_clips, offsets = extract_clips(
@@ -173,21 +182,22 @@ def main(cfg: DictConfig) -> None:
                 cfg.clips_per_file,
                 cfg.clip_seconds,
                 cfg.skip_start_seconds,
-                cfg.early_window_seconds,
+                cfg.end_skip_seconds,
             )
             clips.extend(new_clips)
             if new_clips:
                 offset_str = ", ".join(f"{o:.0f}s" for o in offsets)
-                print(f"Extracted {len(new_clips)} early-window clips from {src_path.name} (at {offset_str})")
+                print(f"Extracted {len(new_clips)} clip(s) from {src_path.name} (at {offset_str})")
 
         if not clips:
-            print("No reference clips extracted - check skip_start_seconds / early_window_seconds", file=sys.stderr)
+            print("No reference clips extracted — check skip_start_seconds", file=sys.stderr)
             sys.exit(1)
 
-        print(f"Total: {len(clips)} reference clips from {len(sources)} recording(s)")
+        total_min = len(clips) * cfg.clip_seconds // 60
+        print(f"Total: {len(clips)} clips from {len(sources)} recording(s) (~{total_min} min of reference audio)")
 
     client = ElevenLabs()
-    upload_cloned_voice(client, clips, cfg)
+    create_pvc_voice(client, clips, cfg)
 
 
 if __name__ == "__main__":

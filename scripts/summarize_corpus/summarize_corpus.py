@@ -14,16 +14,25 @@ from omegaconf import DictConfig
 PAUSE_RE = re.compile(r"\[(?P<kind>ПАУЗА|МИКРОПАУЗА):(?P<seconds>\d+)\]")
 
 MAP_SYSTEM = """You are building a compact reference digest of a single Russian contemporary dance / \
-movement improvisation class transcript, for later use as style/content reference when generating new \
-classes.
+movement improvisation class transcript, for later use when generating new classes in this teacher's style.
 
-Write a freeform digest of about 150-250 words covering:
-- This class's structure and arc (e.g. warm-up, thematic/technical focus, close)
-- Recurring themes, images, or metaphors used during instruction
-- Characteristic vocabulary, phrasing, and code-switched Russian/English movement terms
+Write a structured digest of approximately 200-250 words using exactly these four labeled sections:
 
-Do not count words, pauses, or estimate duration - exact numeric stats for this class are computed \
-separately in code. Output only the digest text, no headers or preamble."""
+**Warm-up:** How does this specific class open? Describe the arrival quality, grounding work, initial \
+mobilizations, and what the teacher guides students through in the opening phase.
+
+**Main section:** What is the central technical or thematic focus? Describe how it develops — what \
+gets introduced, what gets layered on, and how the class progresses toward fuller movement or \
+open improvisation.
+
+**Close:** How does this class end? Describe the improvisation phase, cool-down, verbal reflection, \
+or whatever the teacher does to land the class.
+
+**Vocabulary/style:** The characteristic terms, images, and code-switching patterns in this specific \
+class — movement concepts named, metaphors used, notable Russian/English mixing.
+
+Do not include numeric stats (word counts, pause counts, duration) — those are computed separately \
+in code. Output only the four labeled sections with no preamble."""
 
 REDUCE_SYSTEM = """You are synthesizing a single corpus-wide digest from per-class digests of many \
 Russian contemporary dance / movement improvisation classes by the same teacher, for use as extra \

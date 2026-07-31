@@ -1,31 +1,26 @@
-src: data/preprocessed        # cleaned transcripts (artifact-free, no name placeholders) to draw few-shot examples from
-dst: data/generated            # folder where generated classes (class_001.txt, class_002.txt, ...) are saved
+src: data/preprocessed        # cleaned transcripts to draw few-shot examples from
+dst: data/generated            # generated classes saved here (class_001.txt, class_002.txt, ...)
 model: claude-opus-4-6
-max_tokens: 24000              # generous headroom; streamed so no HTTP-timeout risk - a ~60min narration at ~140wpm is roughly 8000-9000 Russian words, which can run 12000-16000+ output tokens
-num_classes: 5                 # how many classes to generate in this run
-num_examples: 3                # transcripts sampled as few-shot style/content reference, per class
-seed: 0                        # base seed; class i samples examples with seed + i, so each class gets a different reference set
-topic: null                    # optional: e.g. "flow states and points of attention" - applies to every class in the run
-digest_path: data/corpus_digest.txt   # corpus-wide style/content patterns written by summarize_corpus.py; folded into the system prompt if present, skipped silently otherwise
-stats_path: data/corpus_stats.json    # per-corpus word/pause stats written by summarize_corpus.py; calibrates word/pause targets, falls back to hardcoded defaults if missing
-target_minutes: 60             # how long the FINAL AUDIO (after text-to-speech, including realized pause durations) should end up being - around 1 hour, maybe a little longer, per product requirement
+max_tokens: 8000               # ~1200-1500 Russian words at 15 min fits comfortably; generous headroom
+num_classes: 5
+num_examples: 3
+seed: 0
+topic: null                    # strongly recommended for short-form classes — a focused topic
+                               # keeps a 15-minute script coherent (e.g. "chain reactions and echo",
+                               # "weight and counterbalance", "floating quality in the arms")
+digest_path: data/corpus_digest.txt
+stats_path: data/corpus_stats.json
+target_minutes: 15
 
-# Multipliers on the corpus's natural pause / micro-pause share (1.0 = match real classes as-is).
 pause_scale: 1.0
-micro_pause_scale: 1.0
+micro_pause_scale: 1.0         # unused — micro-pause count is no longer targeted numerically
 
-# Each class is written as a sequence of continuation passes rather than one shot: a single Opus
-# call reliably under-produces on a full ~5000-word Russian narration (came out ~half length), so
-# the class is built section by section in a multi-turn conversation, with the total word/pause
-# targets split across sections by weight. Each section is a comfortably-sized generation the model
-# actually completes, and the running conversation keeps it flowing as one coherent class. Weights
-# are normalized automatically, so they need not sum to exactly 1.
+# Three sections instead of four: the short format doesn't support a meaningful two-part main
+# section, so the main body is one continuous exploration. Weights are normalized automatically.
 sections:
-  - name: "разминка / warm-up: arrival, breath, grounding, first gentle mobilizations"
-    weight: 0.22
-  - name: "основная часть I: the main technical or thematic exploration of the class"
-    weight: 0.30
-  - name: "основная часть II: development - phrases, traveling, imagery, deeper play with the theme"
-    weight: 0.28
-  - name: "заключение / close: integration, cool-down, settling, and a natural ending"
-    weight: 0.20
+  - name: "arrival / brief grounding and introducing the topic"
+    weight: 0.15
+  - name: "topic exploration: developing the concept through movement tasks, progressions, and imagery"
+    weight: 0.70
+  - name: "integration and close: letting the work settle, brief open improvisation, natural ending"
+    weight: 0.15
