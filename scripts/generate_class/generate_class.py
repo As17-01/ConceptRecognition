@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import sys
 
 import anthropic
@@ -11,6 +12,15 @@ from omegaconf import DictConfig
 # Fallback assumptions used only when data/corpus_stats.json (written by summarize_corpus.py)
 # hasn't been produced yet - keeps this script runnable before that script's first run.
 DEFAULT_WORDS_PER_MINUTE = 140.0
+
+
+def topic_to_stem(topic: str) -> str:
+    """Convert a topic string into a safe filesystem stem (keeps Cyrillic and Latin)."""
+    stem = topic.strip().lower()
+    stem = re.sub(r'\s+', '_', stem)
+    stem = re.sub(r'[^\w-]', '', stem, flags=re.UNICODE)
+    stem = re.sub(r'_+', '_', stem).strip('_')
+    return stem or "class"
 DEFAULT_PAUSE_FRACTION = 0.3
 DEFAULT_MICRO_PAUSE_FRACTION = 0.02
 
@@ -328,7 +338,11 @@ def main(cfg: DictConfig) -> None:
     client = anthropic.Anthropic()
     succeeded, skipped, failed = 0, 0, 0
     for i in range(cfg.num_classes):
-        dst_path = dst_dir / f"class_{i + 1:03d}.txt"
+        if cfg.topic:
+            stem = topic_to_stem(cfg.topic)
+            dst_path = dst_dir / (f"{stem}.txt" if cfg.num_classes == 1 else f"{stem}_{i + 1:03d}.txt")
+        else:
+            dst_path = dst_dir / f"class_{i + 1:03d}.txt"
 
         # Same resumability pattern as the rest of the pipeline: a crash or interruption
         # partway through a batch of generations shouldn't force redoing (and re-billing)

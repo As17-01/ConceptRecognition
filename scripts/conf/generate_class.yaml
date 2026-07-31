@@ -1,7 +1,7 @@
 src: data/preprocessed        # cleaned transcripts to draw few-shot examples from
 dst: data/generated            # generated classes saved here (class_001.txt, class_002.txt, ...)
-model: claude-opus-4-6
-max_tokens: 8000               # ~1200-1500 Russian words at 15 min fits comfortably; generous headroom
+model: claude-opus-5
+max_tokens: 12000              # ~1200-1500 Russian words at 15 min, with headroom for overshooting sections
 num_classes: 5
 num_examples: 3
 seed: 0
