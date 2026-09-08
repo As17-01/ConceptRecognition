@@ -10,12 +10,10 @@ from omegaconf import DictConfig
 # RUPunct restoration pass was dropped); this only strips characters Whisper occasionally
 # hallucinates from scripts unrelated to the recording (e.g. stray CJK glyphs). Keep Cyrillic,
 # Latin (English words/code-switching), digits (counting, dates), whitespace, and the punctuation
-# marks actually observed across this corpus's transcripts.
-# Square brackets are reserved for structural markers ("[ПАУЗА:N]" / "[МИКРОПАУЗА:N]", emitted
-# natively by transcribe.py) - never emitted by Whisper itself. Hyphen kept last (harmless now that
-# NON_TARGET_CHARS below runs this through re.escape(), which makes literal-vs-range ordering
+# marks actually observed across this corpus's transcripts. Hyphen is kept last (harmless now
+# that NON_TARGET_CHARS below runs this through re.escape(), which makes literal-vs-range ordering
 # inside a [...] class a non-issue).
-ALLOWED_PUNCT = ",.!?%—–…«»*':;[]-"
+ALLOWED_PUNCT = ",.!?%—–…«»*':;-"
 NON_TARGET_CHARS = re.compile(rf"[^0-9A-Za-zА-Яа-яЁё\s{re.escape(ALLOWED_PUNCT)}]")
 
 # Standalone disfluencies only; never matched as a substring, so English words and
@@ -115,12 +113,6 @@ def strip_prompt_echo(text: str) -> str:
     )
     return strip_prompt_vocab_list_echo(text)
 
-# format defined in transcribe.py - keep in sync. Matches either marker type (structural
-# "[ПАУЗА:N]" or short "[МИКРОПАУЗА:N]") - transcribe.py emits these natively now, this file just
-# needs to let them survive cleaning untouched, not backfill them.
-PAUSE_MARKER_RE = re.compile(r"\[(?:ПАУЗА|МИКРОПАУЗА):(\d+)\]")
-
-
 def clean_text(text: str) -> str:
     text = SUBTITLE_CREDITS.sub(" ", text)
     text = strip_prompt_echo(text)
@@ -135,13 +127,8 @@ def normalize_word(word: str) -> str:
 def collapse_repeated_ngrams(words: list[str], max_ngram: int, min_count: int) -> list[str]:
     """Compares words by normalize_word (punctuation-stripped, lowercased) rather than raw text,
     since Whisper's own punctuation on a hallucinated repeat isn't always identical run to run
-    (e.g. "музыка." vs "музыка,"); the original text of the kept (first) occurrence is preserved.
-
-    Pause markers get a unique, never-equal sentinel key instead: several distinct real pauses
-    that happen to round to the same duration (e.g. three separate 10s breaks close together)
-    are a plausible legitimate sequence, not a Whisper hallucination loop, and must never be
-    collapsed down to one."""
-    keys = [object() if PAUSE_MARKER_RE.fullmatch(w) else normalize_word(w) for w in words]
+    (e.g. "музыка." vs "музыка,"); the original text of the kept (first) occurrence is preserved."""
+    keys = [normalize_word(w) for w in words]
     result = []
     i = 0
     n_words = len(words)

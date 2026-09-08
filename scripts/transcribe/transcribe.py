@@ -40,11 +40,7 @@ def build_clips(speech_timestamps: list[dict], max_clip_samples: int) -> list[di
     explicitly (done below, so our own VAD - not faster-whisper's internal one - decides what
     counts as speech) bypasses its own <=30s auto-chunking entirely: a clip longer than the
     model's fixed 30-second window is silently truncated (only the first 30s transcribed, the
-    rest dropped) rather than raising an error.
-
-    This is unrelated to pause-marker placement (see classify_pause_events below), which always
-    uses the original, unmerged VAD segment boundaries regardless of how clips are grouped here -
-    a small in-between gap absorbed into one clip can still get its own marker if it qualifies."""
+    rest dropped) rather than raising an error."""
     clips = []
     clip_start = None
     prev_end = None
@@ -77,35 +73,6 @@ def build_clips(speech_timestamps: list[dict], max_clip_samples: int) -> list[di
     return clips
 
 
-def classify_pause_events(
-    speech_timestamps: list[dict], min_pause_seconds: float, min_micro_pause_seconds: float
-) -> list[tuple[int, str]]:
-    """Returns [(absolute_sample_position, marker_text), ...] in ascending order, one entry for
-    every real gap between consecutive VAD speech segments that's at least min_micro_pause_seconds
-    (the lower of the two thresholds) - "[ПАУЗА:N]" for gaps >= min_pause_seconds (a real
-    movement/music break), "[МИКРОПАУЗА:N]" otherwise (a brief settle/breath pause). position is
-    the end of the segment right before the gap.
-
-    Because clip_timestamps (unlike VAD auto-chunking) preserves the original file's timeline -
-    transcribe() adds each clip's own absolute offset back onto its returned segment timestamps -
-    these positions line up directly with the model's own returned segment timestamps. No
-    proportional/approximate placement is needed, unlike the old VAD-only backfill approach."""
-    min_micro_pause_samples = int(min_micro_pause_seconds * SAMPLE_RATE)
-    min_pause_samples = int(min_pause_seconds * SAMPLE_RATE)
-    events = []
-    for i in range(1, len(speech_timestamps)):
-        gap = speech_timestamps[i]["start"] - speech_timestamps[i - 1]["end"]
-        if gap >= min_micro_pause_samples:
-            # Floor, not round: rounding a gap of e.g. 7.6s up to a displayed "8" would read as
-            # a structural pause despite correctly classifying as micro (7.6 < 8.0) - flooring
-            # guarantees the displayed number can never cross the classification boundary either
-            # way (floor(x) < min_pause_seconds whenever x < min_pause_seconds, and vice versa).
-            pause_seconds = int(gap / SAMPLE_RATE)
-            marker = f"[ПАУЗА:{pause_seconds}]" if gap >= min_pause_samples else f"[МИКРОПАУЗА:{pause_seconds}]"
-            events.append((speech_timestamps[i - 1]["end"], marker))
-    return events
-
-
 def keep_segment(seg, max_no_speech_prob: float, min_avg_logprob: float, max_compression_ratio: float) -> bool:
     return (
         seg.no_speech_prob <= max_no_speech_prob
@@ -129,8 +96,6 @@ def transcribe_mp3(
     vad_min_silence_duration_ms: int,
     vad_speech_pad_ms: int,
     max_clip_seconds: float,
-    min_pause_seconds: float,
-    min_micro_pause_seconds: float,
     batch_size: int,
     hallucination_silence_threshold: float,
     without_timestamps: bool,
@@ -148,7 +113,6 @@ def transcribe_mp3(
         # Nothing detected as speech; fall back to the full audio rather than transcribing nothing.
         speech_timestamps = [{"start": 0, "end": len(wav)}]
 
-    pause_events = classify_pause_events(speech_timestamps, min_pause_seconds, min_micro_pause_seconds)
     clips = build_clips(speech_timestamps, int(max_clip_seconds * SAMPLE_RATE))
     clip_timestamps = [{"start": c["start"] / SAMPLE_RATE, "end": c["end"] / SAMPLE_RATE} for c in clips]
 
@@ -173,23 +137,13 @@ def transcribe_mp3(
         without_timestamps=without_timestamps,
     )
 
-    chunk_texts, total_kept, total_dropped, event_idx = [], 0, 0, 0
+    chunk_texts, total_kept, total_dropped = [], 0, 0
     for seg in segments:
-        seg_start_samples = seg.start * SAMPLE_RATE
-        while event_idx < len(pause_events) and pause_events[event_idx][0] <= seg_start_samples:
-            chunk_texts.append(pause_events[event_idx][1])
-            event_idx += 1
-
         if keep_segment(seg, max_no_speech_prob, min_avg_logprob, max_compression_ratio):
             chunk_texts.append(seg.text.strip())
             total_kept += 1
         else:
             total_dropped += 1
-
-    # A trailing pause after the last kept/dropped segment still needs to be emitted.
-    while event_idx < len(pause_events):
-        chunk_texts.append(pause_events[event_idx][1])
-        event_idx += 1
 
     return " ".join(t for t in chunk_texts if t), total_kept, total_dropped
 
@@ -212,8 +166,6 @@ def transcribe_mp3s(
     vad_min_silence_duration_ms: int,
     vad_speech_pad_ms: int,
     max_clip_seconds: float,
-    min_pause_seconds: float,
-    min_micro_pause_seconds: float,
     batch_size: int,
     hallucination_silence_threshold: float,
     without_timestamps: bool,
@@ -259,8 +211,6 @@ def transcribe_mp3s(
                 vad_min_silence_duration_ms,
                 vad_speech_pad_ms,
                 max_clip_seconds,
-                min_pause_seconds,
-                min_micro_pause_seconds,
                 batch_size,
                 hallucination_silence_threshold,
                 without_timestamps,
@@ -307,8 +257,6 @@ def main(cfg: DictConfig) -> None:
         cfg.vad_min_silence_duration_ms,
         cfg.vad_speech_pad_ms,
         cfg.max_clip_seconds,
-        cfg.min_pause_seconds,
-        cfg.min_micro_pause_seconds,
         cfg.batch_size,
         cfg.hallucination_silence_threshold,
         cfg.without_timestamps,

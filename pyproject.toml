@@ -8,26 +8,8 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "torch (>=2.6.0,<2.7.0)",
-    "numpy (>=1.26,<2.3.0)",
     "hydra-core (>=1.3.3,<2.0.0)",
-    "sentence-transformers (>=3.0.0,<4.0.0)",
-    "transformers (>=4.40.0,<5.0.0)",
-    "sentencepiece (>=0.2.0,<0.2.1)",
-    "tiktoken (>=0.7.0,<0.10.0)",
-    "scikit-learn (>=1.4.0,<1.8.0)",
-    "scipy (>=1.13.0,<1.17.0)",
-    "torchaudio (>=2.6.0,<2.7.0)",
-    "accelerate (>=1.0.0,<2.0.0)",
-    "bitsandbytes (>=0.41.0,<0.42.0)",
-    "hdbscan (>=0.8.44,<0.9.0)",
-    "umap-learn (>=0.5.12,<0.6.0)",
-    "anthropic (>=0.117.0,<0.118.0)",
-    "elevenlabs (>=2.58.0,<3.0.0) ; python_version >= \"3.12\" and python_version < \"4.0\"",
-    "faster-whisper (>=1.2.1,<2.0.0)",
-    "ctranslate2 (==4.6.2)",
-    "av (==14.2.0)",
-    "onnxruntime"
+    "openai (>=2.0.0,<3.0.0)",
 ]
 
 
@@ -40,14 +22,34 @@ package-mode = false
 # which this project never enables (VAD is always done separately via torch.hub's Silero VAD) -
 # see vendor/onnxruntime-stub/onnxruntime/__init__.py for the safety argument and what happens if
 # that assumption is ever wrong (a loud, clear ImportError, not silent misbehavior).
-[tool.poetry.dependencies]
+[tool.poetry.group.local-ml]
+optional = true
+
+[tool.poetry.group.local-ml.dependencies]
+torch = ">=2.6.0,<2.7.0"
+numpy = ">=1.26,<2.3.0"
+sentence-transformers = ">=3.0.0,<4.0.0"
+transformers = ">=4.40.0,<5.0.0"
+sentencepiece = ">=0.2.0,<0.2.1"
+tiktoken = ">=0.7.0,<0.10.0"
+scikit-learn = ">=1.4.0,<1.8.0"
+scipy = ">=1.13.0,<1.17.0"
+torchaudio = ">=2.6.0,<2.7.0"
+accelerate = ">=1.0.0,<2.0.0"
+bitsandbytes = ">=0.41.0,<0.42.0"
+hdbscan = ">=0.8.44,<0.9.0"
+umap-learn = ">=0.5.12,<0.6.0"
+faster-whisper = ">=1.2.1,<2.0.0"
+ctranslate2 = "4.6.2"
+av = "14.2.0"
 onnxruntime = { path = "vendor/onnxruntime-stub", develop = false }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[dependency-groups]
-dev = [
-    "ipykernel (>=7.3.0,<8.0.0)"
-]
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = ">=7.3.0,<8.0.0"

@@ -1,17 +1,11 @@
 import json
-import re
 import sys
 
-import anthropic
 import hydra
+from openai import OpenAI
 
 from pathlib import Path
 from omegaconf import DictConfig
-
-# Structural + micro pause markers; format defined in transcribe.py - keep in sync. Named groups
-# so callers here can tell which kind matched (unlike other scripts, which only need to detect
-# "is this any kind of pause marker" and use an unnamed combined regex).
-PAUSE_RE = re.compile(r"\[(?P<kind>ПАУЗА|МИКРОПАУЗА):(?P<seconds>\d+)\]")
 
 MAP_SYSTEM = """You are building a compact reference digest of a single Russian contemporary dance / \
 movement improvisation class transcript, for later use when generating new classes in this teacher's style.
@@ -31,7 +25,7 @@ or whatever the teacher does to land the class.
 **Vocabulary/style:** The characteristic terms, images, and code-switching patterns in this specific \
 class — movement concepts named, metaphors used, notable Russian/English mixing.
 
-Do not include numeric stats (word counts, pause counts, duration) — those are computed separately \
+Do not include numeric stats such as word counts — those are computed separately \
 in code. Output only the four labeled sections with no preamble."""
 
 REDUCE_SYSTEM = """You are synthesizing a single corpus-wide digest from per-class digests of many \
@@ -48,37 +42,19 @@ verbatim in a short concluding paragraph as pacing guidance for someone writing 
 in this style. Do not recompute, round differently, or estimate these numbers yourself."""
 
 
-def compute_stats(text: str) -> tuple[int, int, int, int, int]:
-    """Exact word/pause counts in plain Python - cheap enough to redo on every run, including for
-    files whose digest already exists and is skipped below (the corpus-wide aggregate still needs
-    every file's numbers). Both structural and micro pause markers are excluded from word_count;
-    each is tallied separately by matched "kind"."""
-    word_count = pause_count = pause_seconds = micro_pause_count = micro_pause_seconds = 0
-    for token in text.split():
-        match = PAUSE_RE.fullmatch(token)
-        if match:
-            seconds = int(match.group("seconds"))
-            if match.group("kind") == "ПАУЗА":
-                pause_count += 1
-                pause_seconds += seconds
-            else:
-                micro_pause_count += 1
-                micro_pause_seconds += seconds
-        else:
-            word_count += 1
-    return word_count, pause_count, pause_seconds, micro_pause_count, micro_pause_seconds
+def compute_word_count(text: str) -> int:
+    """Count words locally for every file, including ones whose digest already exists."""
+    return len(text.split())
 
 
-def summarize_file(client: anthropic.Anthropic, text: str, model: str, max_tokens: int) -> str:
-    # Non-streaming: max_tokens is small (~1024) and each call is independent, well under the
-    # ~16000-token threshold where the SDK requires streaming to avoid HTTP timeouts.
-    message = client.messages.create(
+def summarize_file(client: OpenAI, text: str, model: str, max_tokens: int) -> str:
+    response = client.responses.create(
         model=model,
-        max_tokens=max_tokens,
-        system=MAP_SYSTEM,
-        messages=[{"role": "user", "content": f"Transcript:\n\n{text}"}],
+        max_output_tokens=max_tokens,
+        instructions=MAP_SYSTEM,
+        input=f"Transcript:\n\n{text}",
     )
-    return next(block.text for block in message.content if block.type == "text")
+    return response.output_text
 
 
 def build_reduce_prompt(digests: list[tuple[str, str]], stats: dict) -> str:
@@ -89,11 +65,7 @@ def build_reduce_prompt(digests: list[tuple[str, str]], stats: dict) -> str:
 GIVEN FACTS about the full corpus (computed exactly in code from the real transcripts - report \
 these, do not recompute or estimate them):
 - Classes analyzed: {stats["num_files"]}
-- Average narrated words per class (excluding pause markers): {stats["avg_words"]:.0f}
-- Average number of structural pauses per class: {stats["avg_pause_count"]:.1f}
-- Average total pause duration per class: {stats["avg_pause_seconds"]:.0f} seconds
-- Average number of micro-pauses per class: {stats["avg_micro_pause_count"]:.1f}
-- Average total micro-pause duration per class: {stats["avg_micro_pause_seconds"]:.0f} seconds
+- Average narrated words per class: {stats["avg_words"]:.0f}
 - Assumed speaking rate: {stats["words_per_minute"]:.0f} words/minute
 
 Synthesize ONE consolidated corpus-level digest covering the structure/arc most classes follow, \
@@ -103,15 +75,14 @@ pacing guidance for someone writing a new class script in this style.""")
     return "\n".join(parts)
 
 
-def summarize_corpus(client: anthropic.Anthropic, digests: list[tuple[str, str]], stats: dict, model: str, max_tokens: int) -> str:
-    with client.messages.stream(
+def summarize_corpus(client: OpenAI, digests: list[tuple[str, str]], stats: dict, model: str, max_tokens: int) -> str:
+    response = client.responses.create(
         model=model,
-        max_tokens=max_tokens,
-        system=REDUCE_SYSTEM,
-        messages=[{"role": "user", "content": build_reduce_prompt(digests, stats)}],
-    ) as stream:
-        message = stream.get_final_message()
-    return next(block.text for block in message.content if block.type == "text")
+        max_output_tokens=max_tokens,
+        instructions=REDUCE_SYSTEM,
+        input=build_reduce_prompt(digests, stats),
+    )
+    return response.output_text
 
 
 @hydra.main(config_path="../conf", config_name="summarize_corpus", version_base=None)
@@ -129,23 +100,17 @@ def main(cfg: DictConfig) -> None:
     summaries_dir = Path(cfg.summaries_dst)
     summaries_dir.mkdir(parents=True, exist_ok=True)
 
-    client = anthropic.Anthropic()
+    client = OpenAI()
 
     # Running totals for the corpus-wide aggregate, accumulated every file regardless of whether
     # that file's digest is (re)generated this run or already existed.
-    total_words = total_pause_count = total_pause_seconds = 0
-    total_micro_pause_count = total_micro_pause_seconds = n_files = 0
+    total_words = n_files = 0
     succeeded, skipped, failed = 0, 0, 0
     for src_path in files:
         dst_path = summaries_dir / src_path.name
         try:
             text = src_path.read_text(encoding="utf-8")
-            words, pause_count, pause_seconds, micro_pause_count, micro_pause_seconds = compute_stats(text)
-            total_words += words
-            total_pause_count += pause_count
-            total_pause_seconds += pause_seconds
-            total_micro_pause_count += micro_pause_count
-            total_micro_pause_seconds += micro_pause_seconds
+            total_words += compute_word_count(text)
             n_files += 1
 
             if dst_path.exists():
@@ -173,10 +138,6 @@ def main(cfg: DictConfig) -> None:
     stats = {
         "num_files": n_files,
         "avg_words": total_words / n_files,
-        "avg_pause_count": total_pause_count / n_files,
-        "avg_pause_seconds": total_pause_seconds / n_files,
-        "avg_micro_pause_count": total_micro_pause_count / n_files,
-        "avg_micro_pause_seconds": total_micro_pause_seconds / n_files,
         "words_per_minute": float(cfg.words_per_minute),
     }
 

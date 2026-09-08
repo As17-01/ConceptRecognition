@@ -24,27 +24,15 @@ vad_speech_pad_ms: 100
 # which bypasses its own internal <=30s auto-chunking entirely - a single clip longer than the
 # model's fixed 30-second window gets silently truncated (only the first 30s transcribed) rather
 # than an error, so any VAD segment longer than this is pre-split into consecutive sub-clips here.
-# Kept a bit under Whisper's native 30s window for margin. This has nothing to do with pause
-# markers (which key off min_pause_seconds/min_micro_pause_seconds below) or with re-seeding
-# initial_prompt - faster-whisper's batched pipeline re-applies initial_prompt fresh to every
-# clip regardless of how many there are, so splitting a long segment here doesn't affect that.
+# Kept a bit under Whisper's native 30s window for margin. Faster-whisper's batched pipeline
+# re-applies initial_prompt fresh to every clip regardless of how many there are, so splitting a
+# long segment here doesn't affect that.
 max_clip_seconds: 28
 # Batched transcription: instead of decoding one clip at a time, faster-whisper processes this
 # many clips together per forward pass on the GPU. Every VAD-detected speech burst is its own
 # clip, so a typical file has plenty to batch - raise this if GPU memory allows, for more
 # throughput; lower it if you hit an out-of-memory error.
 batch_size: 16
-
-# Threshold, in real elapsed seconds between two VAD-detected speech segments, above which the
-# gap is treated as a structural pause worth marking in the transcript (e.g. a movement/music
-# break), as opposed to normal breath/sentence gaps - those are already kept out of the reported
-# segment list in the first place by vad_min_silence_duration_ms. Tunable.
-min_pause_seconds: 8.0
-# Second, lower threshold of the same two-tier system: gaps >= min_micro_pause_seconds but
-# < min_pause_seconds become a "[МИКРОПАУЗА:N]" short-pause marker (a brief settle/breath pause -
-# noticeable but not a full structural break) instead of the full "[ПАУЗА:N]" marker above; gaps
-# below this remain unmarked ordinary speech cadence, same as always.
-min_micro_pause_seconds: 2.0
 
 # Segments Whisper itself is unsure about get dropped instead of written out, catching
 # hallucinations VAD doesn't (e.g. mid-speech mistranscriptions). Tune by inspecting
