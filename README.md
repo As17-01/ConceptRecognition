@@ -9,6 +9,15 @@ preprocessing stages, including `summarize_corpus`:
 poetry install
 ```
 
+Copy `.env.example` to `.env` and add the API key used by the configured OpenAI-compatible
+endpoint. The example also sets `OPENAI_BASE_URL` to `https://direct.router-cheap.com/v1`:
+
+```bash
+cp .env.example .env
+```
+
+`summarize_corpus` loads both variables from this file. The `.env` file is excluded from Git.
+
 Install the optional local neural-network stack for training, embedding, clustering, or
 transcription with Whisper/Silero:
 

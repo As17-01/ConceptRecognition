@@ -1,11 +1,14 @@
 import json
+import os
 import sys
+from pathlib import Path
 
 import hydra
+from dotenv import load_dotenv
+from omegaconf import DictConfig
 from openai import OpenAI
 
-from pathlib import Path
-from omegaconf import DictConfig
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 MAP_SYSTEM = """You are building a compact reference digest of a single Russian contemporary dance / \
 movement improvisation class transcript, for later use when generating new classes in this teacher's style.
@@ -45,6 +48,11 @@ in this style. Do not recompute, round differently, or estimate these numbers yo
 def compute_word_count(text: str) -> int:
     """Count words locally for every file, including ones whose digest already exists."""
     return len(text.split())
+
+
+def create_openai_client() -> OpenAI:
+    load_dotenv(PROJECT_ROOT / ".env")
+    return OpenAI(base_url=os.environ["OPENAI_BASE_URL"])
 
 
 def summarize_file(client: OpenAI, text: str, model: str, max_tokens: int) -> str:
@@ -100,7 +108,7 @@ def main(cfg: DictConfig) -> None:
     summaries_dir = Path(cfg.summaries_dst)
     summaries_dir.mkdir(parents=True, exist_ok=True)
 
-    client = OpenAI()
+    client = create_openai_client()
 
     # Running totals for the corpus-wide aggregate, accumulated every file regardless of whether
     # that file's digest is (re)generated this run or already existed.
