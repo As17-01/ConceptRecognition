@@ -1,0 +1,8 @@
+src: data/corpus_markdown
+digest_src: data/corpus_digest.txt
+dst: data/corpus_by_topic_detailed
+
+# Derive detailed topics from the digest AND all summaries, then classify each class.
+model: gpt-6-astra
+topics_max_tokens: 8192
+classify_max_tokens: 2048

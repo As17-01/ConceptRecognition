@@ -6,7 +6,7 @@ authors = [
     {name = "As17-01",email = "aseliverstov@nes.ru"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "hydra-core (>=1.3.3,<2.0.0)",
     "openai (>=2.0.0,<3.0.0)",

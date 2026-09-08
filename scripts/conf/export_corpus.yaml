@@ -1,0 +1,8 @@
+transcripts_src: data/preprocessed
+summaries_src: data/summaries
+digest_src: data/corpus_digest.txt
+dst: data/corpus_markdown
+
+# The preprocessed transcripts are single long lines. Grouping sentences into short Markdown
+# paragraphs makes them easier to scan without changing their words.
+sentences_per_paragraph: 5

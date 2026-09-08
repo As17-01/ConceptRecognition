@@ -10,7 +10,7 @@ stats_dst: data/corpus_stats.json   # exact corpus stats consumed by downstream 
 map_model: gpt-6-astra
 reduce_model: gpt-6-astra
 map_max_tokens: 1024     # ~150-250 word digest per file
-reduce_max_tokens: 4096  # a few hundred to ~1000 word consolidated digest
+reduce_max_tokens: 12000 # detailed topic inventory with per-subtopic coverage and sources
 
 # Assumed speaking rate for Russian instructional narration, folded into corpus_stats.json as
 # words_per_minute (used by generate_class.py to translate a target duration into a word-count
