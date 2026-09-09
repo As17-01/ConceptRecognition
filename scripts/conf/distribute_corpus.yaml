@@ -1,8 +1,11 @@
 src: data/corpus_markdown
 digest_src: data/corpus_digest.txt
-dst: data/corpus_by_topic_detailed
+manifest_dst: data/corpus_markdown/topics_manifest.json
 
 # Derive detailed topics from the digest AND all summaries, then classify each class.
 model: gpt-6-astra
 topics_max_tokens: 8192
 classify_max_tokens: 2048
+
+# Retry only classes without a saved assignment; leave existing annotations untouched.
+failed_only: false

@@ -52,19 +52,20 @@ poetry run python scripts/distribute_corpus/distribute_corpus.py
 
 Settings are in `scripts/conf/distribute_corpus.yaml`. The script loads `.env`, derives a shared
 Russian topic list from `data/corpus_digest.txt` and all class summaries, then sends each class's `summary.md` together
-with that digest and topic list to the LLM. It copies the entire class folder into
-`data/corpus_by_topic_detailed/<topic>/<class>/` for every focused matching topic.
+with that digest and topic list to the LLM. It writes each class's matching topics into its
+`summary.md`, under `## Затронутые темы`.
 The taxonomy aims for 20–40 specific topics where supported, rather than copying digest headings.
 Assignments require a primary focus or a substantial secondary block, with an exact summary
 excerpt as evidence; routine background techniques do not qualify. Classes without a
-matching topic go into `_unmatched`. Source folders are preserved.
+matching topic receive `Нет выделенных тем.` in that section.
 
-`manifest.json` records the topic definitions, assignments, primary/secondary roles, evidence excerpts, and reasons. Reruns reuse completed
-LLM results and retry missing assignments/copies. If the source files, digest, prompts, or model
-settings change, use a new destination to keep output versions separate:
+`data/corpus_markdown/topics_manifest.json` records the topic definitions, assignments,
+primary/secondary roles, evidence excerpts, and reasons. Reruns reuse completed LLM results and
+replace the generated topic section without duplicating it. If the source files, digest, prompts,
+or model settings change, use a new manifest path to keep output versions separate:
 
 ```bash
-poetry run python scripts/distribute_corpus/distribute_corpus.py dst=data/corpus_by_topic_v2
+poetry run python scripts/distribute_corpus/distribute_corpus.py manifest_dst=data/corpus_markdown/topics_manifest_v2.json
 ```
 
 Malformed or incomplete LLM responses are reported as failures; rerun to retry. The script exits
@@ -77,7 +78,7 @@ preserving the existing digest, run:
 
 ```bash
 poetry run python scripts/summarize_corpus/summarize_corpus.py digest_dst=data/corpus_digest_detailed.txt
-poetry run python scripts/distribute_corpus/distribute_corpus.py digest_src=data/corpus_digest_detailed.txt dst=data/corpus_by_topic_detailed_v2
+poetry run python scripts/distribute_corpus/distribute_corpus.py digest_src=data/corpus_digest_detailed.txt manifest_dst=data/corpus_markdown/topics_manifest_detailed.json
 ```
 
 Existing per-class summaries are reused by the summarizer. Neither command updates the previously

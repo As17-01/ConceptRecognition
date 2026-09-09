@@ -1,7 +1,8 @@
 import hashlib
 import json
 import os
-import shutil
+import re
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -95,6 +96,46 @@ def validate_topics(value: dict) -> list[dict]:
     return topics
 
 
+def normalize_evidence(text: str) -> str:
+    """Ignore presentation differences, while retaining words and their order."""
+    text = unicodedata.normalize("NFC", text)
+    text = text.translate(str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"',
+                                       "‘": "'", "’": "'", "–": "-", "—": "-"}))
+    text = re.sub(r"[*_`]", "", text)
+    return " ".join(text.split())
+
+
+def classify_with_retry(client, cfg, topics: list[dict], digest: str, summary: str) -> dict:
+    # Select source passages by ID; never rely on the model reproducing their typography.
+    passages = {f"p{index}": text for index, text in enumerate(
+        (part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", summary) if part.strip()), 1)}
+    payload = {"corpus_digest": digest, "topics": topics, "class_summary": summary,
+               "evidence_passages": passages}
+    instructions = CLASSIFY_SYSTEM + (
+        "\nEvidence transport override: instead of the evidence string, return evidence_id "
+        "for each assignment, selecting exactly one key from evidence_passages whose text "
+        "supports that assignment. Do not quote or rewrite it. Keep topic_id, role, reason, "
+        "and unmatched_reason as specified above. The program will insert the original text."
+    )
+    for attempt in range(3):
+        result = request_json(client, cfg.model, cfg.classify_max_tokens, instructions, payload)
+        try:
+            for item in result.get("assignments", []):
+                evidence_id = item.get("evidence_id") if isinstance(item, dict) else None
+                if not isinstance(evidence_id, str) or evidence_id not in passages:
+                    raise ValueError("Each assignment must select an existing evidence_id")
+                item["evidence"] = passages[evidence_id]
+            return validate_assignment(result, topics, summary)
+        except (ValueError, TypeError) as error:
+            if attempt == 2:
+                raise
+            payload["previous_response"] = result
+            payload["correction_request"] = (
+                f"Validation failed: {error}. Return the complete corrected JSON. "
+                "Select evidence_id from evidence_passages for each supported assignment."
+            )
+
+
 def validate_assignment(value: dict, topics: list[dict], summary: str) -> dict:
     assignments = value.get("assignments")
     if not isinstance(assignments, list):
@@ -112,7 +153,8 @@ def validate_assignment(value: dict, topics: list[dict], summary: str) -> dict:
         if item.get("role") not in {"primary", "secondary"}:
             raise ValueError("Assignment role must be primary or secondary")
         evidence = item.get("evidence")
-        if not isinstance(evidence, str) or not evidence.strip() or evidence not in summary:
+        if (not isinstance(evidence, str) or not evidence.strip() or not normalize_evidence(evidence)
+                or normalize_evidence(evidence) not in normalize_evidence(summary)):
             raise ValueError("Assignment evidence must be an exact excerpt from the class summary")
         seen.add(topic_id)
     reason = value.get("unmatched_reason")
@@ -127,10 +169,24 @@ def save_manifest(path: Path, manifest: dict) -> None:
     temporary.replace(path)
 
 
+TOPICS_SECTION = re.compile(r"\n*## Затронутые темы:?\s*\n.*\Z", re.DOTALL)
+
+
+def without_topics_section(summary: str) -> str:
+    """Return the LLM-authored summary, excluding this script's generated annotation."""
+    return TOPICS_SECTION.sub("", summary).rstrip() + "\n"
+
+
+def add_topics_section(summary: str, topic_names: list[str]) -> str:
+    """Replace the generated topic list, leaving the authored summary untouched."""
+    body = without_topics_section(summary).rstrip()
+    topics = "\n".join(f"- {name}" for name in topic_names) or "- Нет выделенных тем."
+    return f"{body}\n\n## Затронутые темы\n\n{topics}\n"
+
+
 def distribute(cfg: DictConfig, client) -> tuple[int, int]:
-    src, dst = Path(cfg.src).resolve(), Path(cfg.dst).resolve()
-    if src == dst or src in dst.parents or dst in src.parents:
-        raise ValueError("Source and destination must be separate, non-nested directories")
+    src = Path(cfg.src).resolve()
+    manifest_path = Path(cfg.manifest_dst).resolve()
     if not src.is_dir():
         raise ValueError(f"Source folder not found: {src}")
     classes = sorted(path for path in src.iterdir() if path.is_dir())
@@ -145,7 +201,9 @@ def distribute(cfg: DictConfig, client) -> tuple[int, int]:
     fingerprint.update(json.dumps([digest, TOPICS_SYSTEM, CLASSIFY_SYSTEM, cfg.model,
                                    cfg.topics_max_tokens, cfg.classify_max_tokens]).encode())
     for folder in classes:
-        summaries[folder.name] = (folder / "summary.md").read_text(encoding="utf-8")
+        summaries[folder.name] = without_topics_section(
+            (folder / "summary.md").read_text(encoding="utf-8")
+        )
         if not summaries[folder.name].strip():
             raise ValueError(f"Empty summary: {folder}")
         for path in [folder, *sorted(folder.rglob("*"))]:
@@ -153,44 +211,43 @@ def distribute(cfg: DictConfig, client) -> tuple[int, int]:
                 raise ValueError(f"Source symlinks are not supported: {path}")
             fingerprint.update(json.dumps(str(path.relative_to(src))).encode())
             if path.is_file():
-                fingerprint.update(hashlib.sha256(path.read_bytes()).digest())
+                # The generated topic section must not invalidate the source snapshot on rerun.
+                content = (summaries[folder.name].encode("utf-8")
+                           if path == folder / "summary.md" else path.read_bytes())
+                fingerprint.update(hashlib.sha256(content).digest())
     signature = fingerprint.hexdigest()
-    manifest_path = dst / "manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("fingerprint") != signature:
-            raise ValueError("Inputs or settings changed; choose a new dst to avoid mixing output versions")
+            raise ValueError("Inputs or settings changed; use a new manifest_dst to avoid mixing output versions")
         topics = validate_topics(manifest)
     else:
-        if dst.exists() and any(dst.iterdir()):
-            raise ValueError("Destination must be empty or contain this script's matching manifest")
         topics = validate_topics(request_json(client, cfg.model, cfg.topics_max_tokens,
                                              TOPICS_SYSTEM, {"corpus_digest": digest, "class_summaries": summaries}))
         manifest = {"fingerprint": signature, "topics": topics, "classes": {}}
-        dst.mkdir(parents=True, exist_ok=True)
         save_manifest(manifest_path, manifest)
     topic_names = {topic["id"]: topic["name"] for topic in topics}
     succeeded = failed = 0
     for folder in classes:
         try:
             result = manifest["classes"].get(folder.name)
+            if result is not None and cfg.get("failed_only", False):
+                continue
             if result is None:
-                result = request_json(client, cfg.model, cfg.classify_max_tokens, CLASSIFY_SYSTEM,
-                                      {"corpus_digest": digest, "topics": topics,
-                                       "class_summary": summaries[folder.name]})
-                validate_assignment(result, topics, summaries[folder.name])
+                result = classify_with_retry(client, cfg, topics, digest, summaries[folder.name])
                 manifest["classes"][folder.name] = result
                 save_manifest(manifest_path, manifest)
             validate_assignment(result, topics, summaries[folder.name])
-            targets = [topic_names[item["topic_id"]] for item in result["assignments"]] or ["_unmatched"]
-            for topic in targets:
-                shutil.copytree(folder, dst / topic / folder.name, dirs_exist_ok=True)
-            print(f"{folder.name} -> {', '.join(targets)}")
+            targets = [topic_names[item["topic_id"]] for item in result["assignments"]]
+            (folder / "summary.md").write_text(
+                add_topics_section(summaries[folder.name], targets), encoding="utf-8"
+            )
+            print(f"{folder.name} -> {', '.join(targets) if targets else 'no topics'}")
             succeeded += 1
         except Exception as error:
             print(f"FAILED {folder.name}: {error}", file=sys.stderr)
             failed += 1
-    print(f"{succeeded} classes copied, {failed} failed -> {dst}")
+    print(f"{succeeded} summaries annotated, {failed} failed; manifest -> {manifest_path}")
     return succeeded, failed
 
 

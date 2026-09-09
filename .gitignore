@@ -221,4 +221,5 @@ t.txt
 data/
 outputs/
 models/
+.backup
 .vscode
